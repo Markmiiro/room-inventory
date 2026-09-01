@@ -1,0 +1,74 @@
+/* Fonts are bundled, never fetched from Google (SPEC 9): the app has to render
+   fully with no network. Only the weights TOKENS.md actually names are loaded. */
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    background-color: theme("colors.background");
+    /* TOKENS.md: body text is never below 16px. */
+    font-size: 16px;
+  }
+
+  body {
+    @apply bg-background text-text font-sans text-body-md antialiased;
+    margin: 0;
+  }
+
+  /* Focus has to stay visible: this app is used one-handed, often in a hurry. */
+  :focus-visible {
+    outline: 2px solid theme("colors.primary");
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-card rounded-xl shadow-card;
+  }
+
+  .data-label {
+    @apply font-mono text-data-label uppercase text-text-muted;
+  }
+
+  .data-value {
+    @apply font-mono text-data-value text-text;
+  }
+
+  /* TOKENS.md: the action yellow appears once per screen, on the primary
+     button. It is deliberately the only rule that produces this colour. */
+  .btn-action {
+    @apply bg-action text-action-text font-semibold rounded-lg shadow-card
+           min-h-touch px-6 inline-flex items-center justify-center gap-2
+           md:min-h-touch-desktop;
+  }
+
+  .btn-secondary {
+    @apply bg-primary-container text-white font-semibold rounded-lg
+           min-h-touch px-6 inline-flex items-center justify-center gap-2
+           md:min-h-touch-desktop;
+  }
+
+  .btn-quiet {
+    @apply bg-card text-text border border-border font-medium rounded-lg
+           min-h-touch px-4 inline-flex items-center justify-center gap-2
+           md:min-h-touch-desktop;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1
+           font-mono text-data-label uppercase;
+  }
+
+  .field {
+    @apply w-full h-input md:h-input-desktop px-4 rounded-lg border border-border
+           bg-card text-body-md text-text
+           focus:border-primary focus:outline-none;
+  }
+}

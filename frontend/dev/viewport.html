@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Viewport harness</title>
+<!--
+  Dev-only. Vite serves anything under the project root in dev, and copies only
+  `public/` into a build — so this is reachable at /dev/viewport.html while
+  developing and cannot ship.
+
+  Why it exists: the mobile layout is where this app is actually used, and a
+  desktop browser window will not go narrow enough to check it honestly. Media
+  queries evaluate against an iframe's own viewport, so a 390px iframe exercises
+  the real breakpoint.
+
+  Usage:  /dev/viewport.html?routes=/,/move,/rooms/<id>
+-->
+<style>
+  body { margin:0; background:#333; display:flex; gap:16px; padding:16px;
+         font:12px system-ui; color:#fff; align-items:flex-start; overflow-x:auto }
+  figure { margin:0 }
+  figcaption { padding:4px 0; white-space:nowrap }
+  iframe { width:390px; height:600px; border:0; background:#fff; display:block }
+</style>
+<div id="frames" style="display:flex;gap:16px"></div>
+<script>
+  const routes = (new URLSearchParams(location.search).get("routes") ?? "/,/move")
+    .split(",")
+    .filter(Boolean);
+
+  document.getElementById("frames").innerHTML = routes
+    .map(
+      (route) =>
+        `<figure><figcaption>390 x 600 — ${route}</figcaption>` +
+        `<iframe src="${route}"></iframe></figure>`,
+    )
+    .join("");
+</script>

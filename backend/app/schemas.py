@@ -1,0 +1,98 @@
+"""Pydantic v2 wire models."""
+
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# The entity names a client may push. Split by class, because the two are
+# merged by completely different rules (SPEC 3.2, 5.4).
+STATE_ENTITIES = {"room", "record"}
+EVENT_ENTITIES = {"move", "sale", "death", "purchase", "health_record", "expense"}
+SYNCED_ENTITIES = STATE_ENTITIES | EVENT_ENTITIES
+
+EntityName = Literal[
+    "room", "record", "move", "sale", "death", "purchase", "health_record",
+    "expense_category", "customer", "vet", "expense",
+]
+
+
+class Operation(BaseModel):
+    op: Literal["upsert", "insert"]
+    entity: EntityName
+    id: str = Field(min_length=1, max_length=26)
+    data: dict[str, Any]
+    updated_at: datetime
+
+    # Optional per-field stamps. A client that tracks only a row-level
+    # updated_at omits this and every field inherits the operation's stamp.
+    field_updated_at: dict[str, datetime] | None = None
+
+
+class PushRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=64)
+    operations: list[Operation] = Field(max_length=500)
+
+
+class OperationResult(BaseModel):
+    id: str
+    entity: EntityName
+    # applied  — the write landed
+    # duplicate — already seen, safe to drop from the outbox (SPEC 5.3)
+    # conflict — the server's version won at least one field; `server` holds it
+    # rejected — will never succeed; the client should stop retrying
+    status: Literal["applied", "duplicate", "conflict", "rejected"]
+    server: dict[str, Any] | None = None
+    message: str | None = None
+
+
+class PushResponse(BaseModel):
+    results: list[OperationResult]
+    head_seq: int
+    server_time: datetime
+
+
+class PullChange(BaseModel):
+    entity: EntityName
+    id: str
+    seq: int
+    data: dict[str, Any]
+
+
+class PullResponse(BaseModel):
+    changes: list[PullChange]
+    cursor: int
+    has_more: bool
+    server_time: datetime
+
+
+class LoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=256)
+
+
+class Problem(BaseModel):
+    """RFC 7807. `code` is what the outbox drain branches on (SPEC 7)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "about:blank"
+    title: str
+    status: int
+    detail: str | None = None
+    code: str
