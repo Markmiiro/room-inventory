@@ -36,7 +36,7 @@ railway run psql "$DATABASE_URL" -c "show server_version;"     # expect 16.x
 |---|---|---|
 | `APP_ENV` | `production` | **Without this none of the other checks run.** Set it first. |
 | `JWT_SECRET` | 32+ random bytes, unique to this deployment | Startup refuses. Anyone with the repo could mint tokens. |
-| `DATABASE_URL` | Railway's Postgres URL | Startup refuses |
+| `DATABASE_URL` | Railway's Postgres URL, pasted as-is | Startup refuses |
 | `ALLOWED_ORIGINS` | the app's own origin, e.g. `https://rooms.example` | Startup refuses if it is unset or still localhost |
 | `INITIAL_PASSWORD_HASH` | Argon2id hash of the farm's password | Not required — see below |
 
@@ -58,6 +58,15 @@ every login attempt is simply wrong.
 `INITIAL_PASSWORD_HASH` unset and no user row, `ensure_user()` returns `None`
 and login cannot succeed for anyone. That is a locked door, not an open one, so
 deploying without it is safe — you just cannot log in until it is set.
+
+Paste `DATABASE_URL` exactly as Railway gives it. It arrives as
+`postgresql://…`, which SQLAlchemy maps to **psycopg2** — a driver this project
+does not install, so both Alembic and the app die with
+`ModuleNotFoundError: No module named 'psycopg2'`. Alembic dies first, during
+the release command, which makes it look like a migration problem rather than a
+URL problem. `app/config.py` rewrites the bare scheme to `postgresql+psycopg://`
+on the setting that both readers share, so there is nothing to do by hand — but
+if you ever see that error, this is where it comes from.
 
 ### 3. Migrations on deploy
 

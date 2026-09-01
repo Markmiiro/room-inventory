@@ -41,7 +41,7 @@ you hashed. Everything works before you sign in too — it just queues.
 ## Tests
 
 ```bash
-cd backend  && .venv/bin/python -m pytest      # 49 tests, needs a local PostgreSQL
+cd backend  && .venv/bin/python -m pytest      # 64 tests, needs a local PostgreSQL
 cd frontend && npm test                        # 134 tests
 ```
 
