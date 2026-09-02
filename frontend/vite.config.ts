@@ -37,6 +37,16 @@ export default defineConfig({
       devOptions: { enabled: false },
     }),
   ],
+  preview: {
+    /**
+     * Deploy only. Railway serves the built app with `vite preview`, and Vite 6
+     * answers 403 to any Host header it was not told about. The platform hands
+     * out a generated `*.up.railway.app` name, so there is no host to hardcode.
+     * This server only ever returns the contents of `dist/`, which is public by
+     * definition — there is nothing behind the check worth protecting.
+     */
+    allowedHosts: true,
+  },
   server: {
     port: 5173,
     proxy: {
