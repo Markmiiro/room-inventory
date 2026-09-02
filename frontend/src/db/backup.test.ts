@@ -99,14 +99,20 @@ describe("refusing a file", () => {
     const newer = JSON.parse(good());
     newer.schema_version = SCHEMA_VERSION + 1;
 
-    expect(() => parseBackup(JSON.stringify(newer))).toThrow(/version 2/);
+    // Derived from the constant rather than written out, so bumping
+    // SCHEMA_VERSION for a new table does not break this test.
+    expect(() => parseBackup(JSON.stringify(newer))).toThrow(
+      new RegExp(`version ${SCHEMA_VERSION + 1}`),
+    );
   });
 
   it("refuses an older schema version too", () => {
     const older = JSON.parse(good());
     older.schema_version = SCHEMA_VERSION - 1;
 
-    expect(() => parseBackup(JSON.stringify(older))).toThrow(/version 0/);
+    expect(() => parseBackup(JSON.stringify(older))).toThrow(
+      new RegExp(`version ${SCHEMA_VERSION - 1}`),
+    );
   });
 
   it("refuses a file with no schema version at all", () => {
