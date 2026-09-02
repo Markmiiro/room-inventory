@@ -253,15 +253,24 @@ of them is load-bearing for two features that *are* built.
 - **Feed quantity.** Feed is tracked as cost, not as bags in and out. You know
   what you spent, not what you used.
 
-One more, found while building SPEC 13 and not in the spec's own list:
+One more was found while building SPEC 13 and has since been **fixed**, but is
+worth recording because the fix does less than it first appears to:
 
-- **An animal's arrival date is discarded.** The Add or purchase form asks for
-  one and the user types it, but `createRecord` keeps `arrival_date` only for
-  groups (`db/mutations.ts`), so for an animal it is stored as null and survives
-  only as the date of its first move. Date of birth is therefore an animal's
-  *only* possible age basis, and it is optional and blank by default — which
-  means even a bought animal that demonstrably arrived on a known day ends up
-  "age unknown".
+- **An animal's arrival date used to be discarded.** The Add or purchase form
+  asked for one and the user typed it, but `createRecord` kept `arrival_date`
+  only for groups, so for an animal it was stored as null and survived only as
+  the date of its first move. It is now kept for both kinds, shown on Record
+  detail, and editable. The dates already lost are recovered from that first
+  move — on the server by migration `0007`, and on each device by the version 8
+  upgrade in `db/schema.ts`, both reading the same move so they agree without
+  talking. `db/backfill.ts` holds the rule.
+
+  **This does not close the age gap, and must not be made to.** An arrival date
+  is not an age. A two-year-old cow bought last week arrived last week and is
+  not a week old, so `domain/age.ts` still counts an animal's age from its date
+  of birth alone, exactly as SPEC 13.3 says. Only a group's age comes from its
+  arrival. So birth records remain the real fix for the missing ages, and the
+  add and edit forms now say plainly what a blank date of birth costs.
 
 ### Restoring a backup
 

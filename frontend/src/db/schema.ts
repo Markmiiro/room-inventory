@@ -1,5 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
+import { recoverAnimalArrivalDates } from "./backfill";
+
 import type {
   Customer,
   Death,
@@ -101,6 +103,59 @@ export class RoomInventoryDB extends Dexie {
       healthRecords: "id, record_id, date, next_due, schedule_id",
     });
 
+
+    /**
+     * Recover the arrival dates that were discarded for animals.
+     *
+     * `createRecord` used to keep `arrival_date` only for groups, so the date
+     * typed on the add form was dropped for an animal. It survived as the date
+     * of the record's initial placement — the move with a null `from_room_id` —
+     * and this reads it back from there. It recovers what the user entered
+     * rather than guessing: the value written is the one they typed.
+     *
+     * The matching server-side recovery is
+     * `backend/alembic/versions/0007_backfill_animal_arrival_date.py`, and both
+     * derive the same date from the same move, so the two agree without
+     * needing to talk.
+     *
+     * The correction is queued for the server as well as written locally. A
+     * record created offline before the fix already has an outbox entry
+     * carrying a null arrival date, and the server migration will have run long
+     * before that entry arrives — so without this the null would land on the
+     * server and be pulled back over the recovered value. The queued entry
+     * carries the record's existing `updated_at` rather than now, so a genuine
+     * later edit on another device still wins (SPEC 5.4).
+     *
+     * No table's shape changes, so `stores` names nothing: this version exists
+     * only to carry the upgrade.
+     */
+    this.version(8).upgrade(async (tx) => {
+      const [records, moves] = await Promise.all([
+        tx.table("records").toArray(),
+        tx.table("moves").toArray(),
+      ]);
+
+      for (const { recordId, arrival_date } of recoverAnimalArrivalDates(
+        records as Record_[],
+        moves as Move[],
+      )) {
+        const record = (records as Record_[]).find((r) => r.id === recordId)!;
+        await tx.table("records").put({ ...record, arrival_date });
+        await tx.table("outbox").add({
+          op: "upsert",
+          entity: "record",
+          id: recordId,
+          data: { arrival_date },
+          // The record's existing stamp, not now: a genuine later edit on
+          // another device must still win (SPEC 5.4).
+          updated_at: record.updated_at,
+          queued_at: new Date().toISOString(),
+          attempts: 0,
+          last_error: null,
+          next_attempt_at: null,
+        });
+      }
+    });
   }
 }
 

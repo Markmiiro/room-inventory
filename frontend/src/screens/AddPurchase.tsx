@@ -109,7 +109,8 @@ export function AddPurchaseScreen() {
         breed: breed.trim() || null,
         sex: isGroup ? null : sex,
         date_of_birth: isGroup ? null : dob || null,
-        arrival_date: isGroup ? arrival : null,
+        // Kept for an animal too; it used to be dropped here (see createRecord).
+        arrival_date: arrival || null,
         head_count: head,
         source,
         notes: notes.trim() || null,

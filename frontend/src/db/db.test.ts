@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { ageBasis } from "../domain/age";
 import { currentRoomId, findTagClash, occupancy, roomType } from "../domain/rules";
 import { resetDeviceIdCache, todayInEAT } from "./ids";
 import {
@@ -104,6 +105,56 @@ describe("creating a record", () => {
     const moves = await db.moves.where("record_id").equals(record.id).toArray();
     expect(moves).toHaveLength(1);
     expect(moves[0]).toMatchObject({ from_room_id: null, to_room_id: seedRoomId(1), reason: "new_arrival" });
+  });
+
+  /**
+   * The arrival date used to be kept only for groups, so for an animal the date
+   * typed on the add form was dropped on the way into the database. It is a
+   * separate fact from age: SPEC 13.3 still counts an animal's age from its
+   * date of birth alone, and this field does not stand in for it.
+   */
+  it("keeps an animal's arrival date rather than discarding it", async () => {
+    await seedRoomsIfEmpty();
+    const record = await createRecord({
+      kind: "animal",
+      species: "cattle",
+      tag: "C-084",
+      source: "bought",
+      arrival_date: "2026-08-12",
+      room_id: seedRoomId(1),
+      date: "2026-08-12",
+    });
+
+    expect(record.arrival_date).toBe("2026-08-12");
+    expect((await db.records.get(record.id))!.arrival_date).toBe("2026-08-12");
+  });
+
+  it("pushes the arrival date to the server with the record", async () => {
+    const record = await createRecord({
+      kind: "animal",
+      species: "cattle",
+      tag: "C-085",
+      source: "bought",
+      arrival_date: "2026-08-12",
+    });
+
+    const queued = await db.outbox.where("id").equals(record.id).first();
+    expect(queued!.data.arrival_date).toBe("2026-08-12");
+  });
+
+  it("still leaves an animal age-unknown when only the arrival date is known", async () => {
+    // SPEC 13.4 — an arrival date is not an age. A two-year-old cow bought last
+    // week arrived last week and is not a week old, so no schedule may fire.
+    const record = await createRecord({
+      kind: "animal",
+      species: "cattle",
+      tag: "C-086",
+      source: "bought",
+      arrival_date: "2026-08-12",
+    });
+
+    expect(record.date_of_birth).toBeNull();
+    expect(ageBasis(record)).toBeNull();
   });
 
   it("holds an animal at exactly one head", async () => {

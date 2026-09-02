@@ -204,7 +204,18 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
     breed: input.breed ?? null,
     sex: input.kind === "animal" ? input.sex ?? null : null,
     date_of_birth: input.kind === "animal" ? input.date_of_birth ?? null : null,
-    arrival_date: input.kind === "group" ? input.arrival_date ?? null : null,
+    // Kept for animals as well as groups. It used to be discarded for an
+    // animal, which meant a date the user had typed on the add form survived
+    // only as the date of the record's first move — recoverable in principle,
+    // invisible in practice, and gone entirely for an animal added with no
+    // room. It is when the animal joined the farm, which is worth knowing on
+    // its own.
+    //
+    // It is deliberately *not* an age. SPEC 13.3 counts an animal's age from
+    // its date of birth and a group's from its arrival, and that asymmetry is
+    // correct: a two-year-old cow bought last week arrived last week and is not
+    // a week old. `domain/age.ts` does not read this field for an animal.
+    arrival_date: input.arrival_date ?? null,
     initial_head_count: head,
     head_count: head,
     offspring_count: null,

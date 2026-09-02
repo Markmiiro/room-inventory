@@ -189,6 +189,10 @@ export function RecordDetailScreen() {
           <>
             <Fact label="Sex" value={record.sex === "male" ? "Male" : record.sex ? "Female" : null} />
             <Fact label="Date of birth" value={record.date_of_birth && formatDate(record.date_of_birth)} />
+            {/* Shown for an animal as well as a group. It is when this animal
+                joined the farm, not how old it is — an animal's age comes from
+                its date of birth alone (SPEC 13.3). */}
+            <Fact label="Arrived" value={record.arrival_date && formatDate(record.arrival_date)} />
           </>
         )}
         <Fact label="Source" value={SOURCE_LABEL[record.source]} />
@@ -430,9 +434,10 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
       breed: breed.trim() || null,
       notes: notes.trim() || null,
     };
-    if (isGroup) {
-      changes.arrival_date = arrival || null;
-    } else {
+    // Arrival applies to both kinds. For a group it is also what its age is
+    // counted from; for an animal it is only a record of when it got here.
+    changes.arrival_date = arrival || null;
+    if (!isGroup) {
       changes.sex = sex;
       changes.date_of_birth = dob || null;
       changes.offspring_count = offspringCount;
@@ -465,15 +470,13 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
           onChange={(e) => setBreed(e.target.value)} placeholder="Friesian"
         />
 
-        {isGroup ? (
-          <>
-            <label className="data-label block mt-4 mb-1" htmlFor="edit-arrival">Arrived</label>
-            <input
-              id="edit-arrival" type="date" className="field font-mono" value={arrival}
-              max={todayInEAT()} onChange={(e) => setArrival(e.target.value)}
-            />
-          </>
-        ) : (
+        <label className="data-label block mt-4 mb-1" htmlFor="edit-arrival">Arrived</label>
+        <input
+          id="edit-arrival" type="date" className="field font-mono" value={arrival}
+          max={todayInEAT()} onChange={(e) => setArrival(e.target.value)}
+        />
+
+        {!isGroup && (
           <>
             <fieldset className="mt-4">
               <legend className="data-label mb-2">Sex</legend>
@@ -500,6 +503,16 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
               id="edit-dob" type="date" className="field font-mono" value={dob}
               max={todayInEAT()} onChange={(e) => setDob(e.target.value)}
             />
+            {/* SPEC 13.4 — the one field that decides whether this animal gets a
+                treatment schedule at all, so the form says so rather than
+                leaving it as another optional box. The arrival date above does
+                not stand in for it: an animal bought at two years old arrived
+                recently and is not new-born. */}
+            <p className="text-body-md text-text-muted mt-1">
+              {dob
+                ? "Treatment schedules and sale readiness are worked out from this."
+                : "Without this, no treatment schedule runs for this animal and no sale readiness is shown. The arrival date is not used instead — it says when it got here, not how old it is."}
+            </p>
             <label className="data-label block mt-4 mb-1" htmlFor="edit-offspring">
               {sex === "male" ? "Offspring sired" : "Offspring"}
             </label>
