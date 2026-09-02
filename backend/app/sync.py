@@ -37,6 +37,8 @@ from app.models import (
     Sale,
     TreatmentSchedule,
     Vet,
+    VetVisit,
+    VisitNote,
 )
 from app.schemas import EVENT_ENTITIES, Operation, OperationResult, PullChange
 
@@ -55,6 +57,8 @@ ENTITY_MODELS: dict[str, type] = {
     "vet": Vet,
     "expense": Expense,
     "treatment_schedule": TreatmentSchedule,
+    "vet_visit": VetVisit,
+    "visit_note": VisitNote,
 }
 
 # Columns a client may write, per entity. Anything else in `data` is ignored
@@ -75,7 +79,7 @@ WRITABLE: dict[str, set[str]] = {
     "purchase": {"record_id", "date", "price", "seller", "count"},
     "health_record": {
         "record_id", "type", "product", "dose", "date", "next_due",
-        "withdrawal_days", "vet_id", "cost", "notes", "schedule_id",
+        "withdrawal_days", "vet_id", "cost", "notes", "schedule_id", "visit_id",
     },
     "expense_category": {"name", "is_archived", "deleted_at"},
     "customer": {"name", "phone", "location", "notes", "deleted_at"},
@@ -86,6 +90,10 @@ WRITABLE: dict[str, set[str]] = {
         "applies_to", "default_product", "default_withdrawal_days", "is_active",
         "notes", "deleted_at",
     },
+    "vet_visit": {
+        "date", "vet_id", "status", "call_out_fee", "reason", "notes", "deleted_at",
+    },
+    "visit_note": {"visit_id", "record_id", "note"},
 }
 
 DATE_FIELDS = {"date", "date_of_birth", "arrival_date", "offspring_updated_at", "next_due"}
@@ -239,6 +247,7 @@ def _missing_required(entity: str, fields: dict[str, Any]) -> list[str]:
         "death": ["record_id", "date", "count", "cause"],
         "purchase": ["record_id", "date", "price", "count"],
         "health_record": ["record_id", "type", "date"],
+        "visit_note": ["visit_id", "record_id", "note"],
         "expense": ["amount", "category_id", "date", "applies_to"],
     }.get(entity, [])
     return [f for f in required if fields.get(f) is None]

@@ -50,7 +50,7 @@ def db(migrated_database):
             text(
                 "TRUNCATE moves, sales, deaths, purchases, health_records, "
                 "expenses, expense_categories, customers, vets, "
-                "treatment_schedules, records, rooms, "
+                "visit_notes, vet_visits, treatment_schedules, records, rooms, "
                 "sync_anomalies, refresh_tokens, users RESTART IDENTITY CASCADE"
             )
         )
@@ -192,6 +192,22 @@ def op_category(id_: str, at: str, name: str = "Feed"):
         "entity": "expense_category",
         "id": id_,
         "data": {"name": name, "is_archived": False},
+        "updated_at": at,
+    }
+
+
+def op_visit(id_: str, at: str, **fields):
+    data = {"date": "2026-08-31", "status": "completed", "call_out_fee": 90_000}
+    data.update(fields)
+    return {"op": "upsert", "entity": "vet_visit", "id": id_, "data": data, "updated_at": at}
+
+
+def op_visit_note(id_: str, at: str, visit_id: str, record_id: str, note: str = "Watch it"):
+    return {
+        "op": "insert",
+        "entity": "visit_note",
+        "id": id_,
+        "data": {"visit_id": visit_id, "record_id": record_id, "note": note},
         "updated_at": at,
     }
 

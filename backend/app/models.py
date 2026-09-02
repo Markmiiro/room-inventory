@@ -181,6 +181,62 @@ class TreatmentSchedule(StateMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
 
+class VetVisit(StateMixin, Base):
+    """SPEC 14.2 — one visit from the vet.
+
+    One date, one vet, several animals, some treated and some only looked at,
+    and a single call-out fee for the lot. A treatment is one animal and one
+    product, so none of that fits on a ``HealthRecord``.
+
+    **A state entity, which departs from SPEC 16's sync note.** That note says
+    visits are "events, append-only", but SPEC 14.2 gives a visit a ``status``
+    that moves from ``planned`` to ``completed``, and describes the working
+    pattern as "create the visit, add treatments as they happen, mark
+    completed". The fee and the vet's advice are both written after the fact
+    onto a row that already exists. An append-only visit could not record any of
+    that: each correction would be a new visit, and one call-out would end up
+    counted several times. So it carries ``field_versions`` and merges per field
+    like a room — which is also what the farm needs, since one person marking a
+    visit completed and another typing up the advice must not overwrite each
+    other (SPEC 5.4).
+
+    ``VisitNote`` genuinely is an event, and is modelled as one below.
+    """
+
+    __tablename__ = "vet_visits"
+
+    # May be in the future, for a planned visit.
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    vet_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("vets.id"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="completed")
+    # Whole UGX. The fee for the journey, separate from any treatment cost.
+    call_out_fee: Mapped[int | None] = mapped_column(BigInteger)
+    reason: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class VisitNote(SyncMixin, Base):
+    """SPEC 14.4 — the vet looked at this one and said watch it.
+
+    An observation rather than a treatment, so that "seen but not treated" can
+    be recorded without inventing a dose that never happened — which on a
+    withdrawal period would be a dangerous thing to write down. It also counts
+    the animal as seen for the call-out fee split (SPEC 14.3).
+
+    An event: written once, about one animal, on one visit.
+    """
+
+    __tablename__ = "visit_notes"
+
+    visit_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("vet_visits.id"), nullable=False, index=True
+    )
+    record_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("records.id"), nullable=False, index=True
+    )
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class Expense(SyncMixin, Base):
     """SPEC 3.10 — money spent on the farm rather than on one animal.
 
@@ -249,6 +305,11 @@ class HealthRecord(SyncMixin, Base):
     # any schedule's next date.
     schedule_id: Mapped[str | None] = mapped_column(
         String(26), ForeignKey("treatment_schedules.id"), index=True
+    )
+    # SPEC 14.2 — the visit this dose was given during. Null when it was
+    # self-administered, which is most days.
+    visit_id: Mapped[str | None] = mapped_column(
+        String(26), ForeignKey("vet_visits.id"), index=True
     )
 
 

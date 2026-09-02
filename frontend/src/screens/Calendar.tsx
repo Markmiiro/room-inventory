@@ -7,6 +7,7 @@ import {
   allDeaths,
   allHealth,
   allSchedules,
+  allVetVisits,
   allMoves,
   allPurchases,
   allSales,
@@ -22,6 +23,8 @@ import type {
   Room,
   Sale,
   TreatmentSchedule,
+  Vet,
+  VetVisit,
 } from "../db/types";
 import {
   calendarEvents,
@@ -63,11 +66,25 @@ export function CalendarScreen() {
   const sales = useLiveQuery(allSales, [], [] as Sale[]);
   const deaths = useLiveQuery(allDeaths, [], [] as Death[]);
   const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
+  const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
+  const vets = useLiveQuery(() => db.vets.toArray(), [], [] as Vet[]);
 
   const events = useMemo(
     () =>
-      calendarEvents({ records, rooms, moves, purchases, health, sales, deaths, schedules, today }),
-    [records, rooms, moves, purchases, health, sales, deaths, schedules, today],
+      calendarEvents({
+        records,
+        rooms,
+        moves,
+        purchases,
+        health,
+        sales,
+        deaths,
+        schedules,
+        visits,
+        vets,
+        today,
+      }),
+    [records, rooms, moves, purchases, health, sales, deaths, schedules, visits, vets, today],
   );
   const byDate = useMemo(() => eventsByDate(events), [events]);
 
@@ -188,6 +205,7 @@ const DOT: Record<CalendarKind, string> = {
   sale: "bg-primary",
   move: "bg-text-muted",
   death: "bg-text",
+  visit: "bg-primary-container",
 };
 
 function Dot({ kind }: { kind: CalendarKind }) {

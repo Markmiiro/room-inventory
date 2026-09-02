@@ -10,6 +10,8 @@ import type {
   Room,
   Sale,
   TreatmentSchedule,
+  VetVisit,
+  VisitNote,
 } from "./types";
 
 /** Reads the screens run. Everything comes from IndexedDB, so every screen
@@ -160,3 +162,35 @@ export async function allSchedules(): Promise<TreatmentSchedule[]> {
     .sort((a, b) => (a.species === b.species ? a.name.localeCompare(b.name) : a.species.localeCompare(b.species)));
 }
 
+/** SPEC 14 — every visit, planned and completed. */
+export async function allVetVisits(): Promise<VetVisit[]> {
+  const visits = await db.vetVisits.toArray();
+  return visits.filter((v) => !v.deleted_at);
+}
+
+export async function allVisitNotes(): Promise<VisitNote[]> {
+  const notes = await db.visitNotes.toArray();
+  return notes.filter((n) => !n.deleted_at);
+}
+
+/** SPEC 14.5 — the observations against one animal, for its health history. */
+export async function visitNotesForRecord(recordId: string): Promise<VisitNote[]> {
+  const notes = await db.visitNotes.where("record_id").equals(recordId).toArray();
+  return notes
+    .filter((n) => !n.deleted_at)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+/** The treatments and notes belonging to one visit — what Visit detail lists. */
+export async function visitContents(
+  visitId: string,
+): Promise<{ health: HealthRecord[]; notes: VisitNote[] }> {
+  const [health, notes] = await Promise.all([
+    db.healthRecords.where("visit_id").equals(visitId).toArray(),
+    db.visitNotes.where("visit_id").equals(visitId).toArray(),
+  ]);
+  return {
+    health: health.filter((h) => !h.deleted_at),
+    notes: notes.filter((n) => !n.deleted_at),
+  };
+}

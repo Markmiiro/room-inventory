@@ -1,4 +1,12 @@
-import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "../db/types";
+import type {
+  HealthRecord,
+  Move,
+  Record_,
+  Room,
+  TreatmentSchedule,
+  Vet,
+  VetVisit,
+} from "../db/types";
 import { AGE_UNKNOWN_DETAIL, recordsWithUnknownAge } from "./age";
 import { addDays, daysBetween } from "./format";
 import { currentRoomId, isOverCapacity, occupancy } from "./rules";
@@ -32,7 +40,10 @@ export type AlertKind =
   | "treatment_due_later"
   // SPEC 16 — the three conditions sections 13 and 15 add.
   | "scheduled_treatment_due"
-  | "no_date_of_birth";
+  | "no_date_of_birth"
+  // SPEC 14.2 — a planned visit "appears on the Calendar and in Alerts as it
+  // approaches".
+  | "planned_visit";
 
 export interface Alert {
   /** Stable across recomputations, so React keys and "seen" state hold still. */
@@ -62,6 +73,10 @@ export interface AlertInputs {
   /** SPEC 13 — the rules that turn a schedule into a date. Defaulted so the
    *  existing callers and tests keep working unchanged. */
   schedules?: TreatmentSchedule[];
+  /** SPEC 14 — planned visits, for the one that is coming up. */
+  visits?: VetVisit[];
+  /** Named on the alert, because "a vet visit" is less useful than which vet. */
+  vets?: Vet[];
   /** Today in East Africa Time, as YYYY-MM-DD. */
   today: string;
   /** When the oldest unsent outbox entry was queued, as an ISO timestamp.
@@ -113,6 +128,7 @@ export function computeAlerts(inputs: AlertInputs): Alert[] {
     ...treatmentAlerts(liveHealth, byId, today),
     ...scheduledTreatments(dueItems),
     ...missingDateOfBirth(active),
+    ...plannedVisits(inputs.visits ?? [], inputs.vets ?? [], today),
     ...syncFailing(inputs),
     ...longIsolationStays(roomById, active, moves, today),
     ...duplicateTags(active),
@@ -321,6 +337,55 @@ function missingDateOfBirth(active: Record_[]): Alert[] {
       count: missing.length,
     },
   ];
+}
+
+/**
+ * SPEC 14.2 — a planned visit, as it approaches.
+ *
+ * Only planned ones. A completed visit is a thing that has happened and needs
+ * nothing from anybody, and a visit already marked completed but dated in the
+ * future is a data entry slip rather than something to chase.
+ *
+ * A planned visit whose date has passed is the case worth being loud about: it
+ * either happened and nobody recorded it, or it did not happen and nobody
+ * rebooked it. Both need a person, so it is urgent rather than quietly dropped.
+ */
+function plannedVisits(visits: VetVisit[], vets: Vet[], today: string): Alert[] {
+  const nameOf = new Map(vets.filter((v) => !v.deleted_at).map((v) => [v.id, v.name]));
+  const alerts: Alert[] = [];
+
+  for (const visit of visits) {
+    if (visit.deleted_at) continue;
+    if (visit.status !== "planned") continue;
+
+    const days = daysBetween(today, visit.date);
+    if (days > DUE_LATER_DAYS) continue;
+
+    const who = (visit.vet_id && nameOf.get(visit.vet_id)) || "The vet";
+    const why = visit.reason ? ` \u2014 ${visit.reason}` : "";
+
+    if (days < 0) {
+      alerts.push({
+        id: `planned_visit:${visit.id}`,
+        kind: "planned_visit",
+        priority: "urgent",
+        title: `${who} was due ${-days} ${plural(-days, "day")} ago`,
+        detail: `A visit planned for ${visit.date} is still marked planned${why}. Mark it completed, or move it.`,
+        date: visit.date,
+      });
+    } else {
+      alerts.push({
+        id: `planned_visit:${visit.id}`,
+        kind: "planned_visit",
+        priority: days <= DUE_SOON_DAYS ? "this_week" : "later",
+        title: days === 0 ? `${who} is due today` : `${who} is due in ${days} ${plural(days, "day")}`,
+        detail: `Planned for ${visit.date}${why}.`,
+        date: visit.date,
+      });
+    }
+  }
+
+  return alerts;
 }
 
 /** SPEC 4.6 — unsynced changes older than 48 hours. Not "offline": being

@@ -80,6 +80,7 @@ function treatment(over: Partial<HealthRecord> = {}): HealthRecord {
     cost: null,
     notes: null,
     schedule_id: "sch-1",
+    visit_id: null,
     ...over,
   };
 }

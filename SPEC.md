@@ -822,11 +822,34 @@ Never blocks or prompts a sale. It is information, not instruction.
 - **More** gains Manage schedules, Sale targets, and Vet visits.
 - **Money** — visit call-out fees are a new direct cost alongside treatment
   costs.
-- **Sync** — TreatmentSchedule, SaleTarget and VetVisit follow the existing
-  rules. Schedules and targets are state entities with per-field
-  last-write-wins. Visits and visit notes are events, append-only. Seeded
-  schedules need fixed ids in both the migration and the client seed, exactly as
-  the ten rooms do, or two devices seeding offline produce duplicates.
+- **Sync** — TreatmentSchedule, SaleTarget, VetVisit and VisitNote follow the
+  existing rules of SPEC 3.2 and 5.4.
+
+  **Schedules, sale targets and vet visits are state entities** with per-field
+  last-write-wins. **Visit notes are events**, append-only.
+
+  A visit is a state entity even though it records something that happened,
+  which is worth stating plainly because an earlier draft of this section had it
+  as an event. It cannot be one. Section 14.2 gives a visit a `status` that
+  moves from `planned` to `completed`, and describes the working pattern as
+  "create the visit, add treatments as they happen, mark completed" — marking
+  completed is an edit to a row that already exists. So are the two things the
+  vet leaves behind: the call-out fee and what the vet said are both written
+  afterwards. An append-only visit would turn each of those into a *new* visit,
+  so a single call-out would be counted several times and its fee split several
+  times over (14.3).
+
+  Per-field merging is also what the work needs. One person marking a visit
+  completed while another types up the vet's advice must not cost each other
+  their edit, which is exactly what SPEC 5.4 is for.
+
+  A visit note has none of that: it is written once, about one animal, on one
+  visit, and corrected by adding another note rather than by editing. It is an
+  event, and two devices noting the same animal keep both notes.
+
+  Seeded schedules and sale targets need fixed ids in both the migration and the
+  client seed, exactly as the ten rooms do, or two devices seeding offline
+  produce duplicates.
 
 ---
 

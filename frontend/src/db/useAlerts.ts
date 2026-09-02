@@ -1,7 +1,22 @@
 import { useMemo } from "react";
 
-import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "./types";
-import { allHealth, allMoves, allSchedules, liveRooms, outboxAge } from "./queries";
+import type {
+  HealthRecord,
+  Move,
+  Record_,
+  Room,
+  TreatmentSchedule,
+  Vet,
+  VetVisit,
+} from "./types";
+import {
+  allHealth,
+  allMoves,
+  allSchedules,
+  allVetVisits,
+  liveRooms,
+  outboxAge,
+} from "./queries";
 import { db } from "./schema";
 import { todayInEAT } from "./ids";
 import { computeAlerts, type Alert } from "../domain/alerts";
@@ -25,6 +40,9 @@ export function useAlerts(): Alert[] {
   // SPEC 13 — the schedules feed the due rules, so they arrive with the rest of
   // the inputs rather than being fetched again by whichever screen asks first.
   const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
+  // SPEC 14.2 — a planned visit appears in Alerts as it approaches.
+  const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
+  const vets = useLiveQuery(() => db.vets.toArray(), [], [] as Vet[]);
   const outbox = useLiveQuery(outboxAge, [], { count: 0, oldestQueuedAt: null });
 
   return useMemo(
@@ -35,10 +53,12 @@ export function useAlerts(): Alert[] {
         moves,
         health,
         schedules,
+        visits,
+        vets,
         today: todayInEAT(),
         oldestPendingAt: outbox.oldestQueuedAt,
         pendingCount: outbox.count,
       }),
-    [rooms, records, moves, health, schedules, outbox],
+    [rooms, records, moves, health, schedules, visits, vets, outbox],
   );
 }

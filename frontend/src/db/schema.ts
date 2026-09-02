@@ -17,6 +17,8 @@ import type {
   SyncMeta,
   TreatmentSchedule,
   Vet,
+  VetVisit,
+  VisitNote,
 } from "./types";
 
 /**
@@ -40,6 +42,8 @@ export class RoomInventoryDB extends Dexie {
   customers!: Table<Customer, string>;
   vets!: Table<Vet, string>;
   treatmentSchedules!: Table<TreatmentSchedule, string>;
+  vetVisits!: Table<VetVisit, string>;
+  visitNotes!: Table<VisitNote, string>;
   outbox!: Table<OutboxOperation, number>;
   meta!: Table<SyncMeta, string>;
 
@@ -103,7 +107,6 @@ export class RoomInventoryDB extends Dexie {
       healthRecords: "id, record_id, date, next_due, schedule_id",
     });
 
-
     /**
      * Recover the arrival dates that were discarded for animals.
      *
@@ -155,6 +158,17 @@ export class RoomInventoryDB extends Dexie {
           next_attempt_at: null,
         });
       }
+    });
+
+    // SPEC 14. Visits are looked up by date for the list and the calendar;
+    // notes and treatments are both looked up by the visit they belong to, so
+    // the fee split never scans either table whole (SPEC 6.13). Adding
+    // `visit_id` to `healthRecords` means restating its index list, because
+    // Dexie replaces a table's schema rather than merging into it.
+    this.version(9).stores({
+      vetVisits: "id, date, status",
+      visitNotes: "id, visit_id, record_id",
+      healthRecords: "id, record_id, date, next_due, schedule_id, visit_id",
     });
   }
 }

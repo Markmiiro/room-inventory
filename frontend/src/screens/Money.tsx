@@ -9,6 +9,8 @@ import {
   allMoves,
   allPurchases,
   allSales,
+  allVetVisits,
+  allVisitNotes,
   liveCategories,
 } from "../db/queries";
 import { db } from "../db/schema";
@@ -21,8 +23,11 @@ import type {
   Purchase,
   Record_,
   Sale,
+  VetVisit,
+  VisitNote,
 } from "../db/types";
 import { departuresFrom, expenseShareFor } from "../domain/allocation";
+import { callOutFeeFor, totalCallOutFees } from "../domain/visits";
 import { formatUGX, formatUGXShort } from "../domain/format";
 import { useLiveQuery } from "../sync/useSync";
 
@@ -56,6 +61,9 @@ export function MoneyScreen() {
   const deaths = useLiveQuery(allDeaths, [], [] as Death[]);
   const expenses = useLiveQuery(allExpenses, [], [] as Expense[]);
   const health = useLiveQuery(allHealth, [], [] as HealthRecord[]);
+  // SPEC 14.3 — call-out fees are a direct cost alongside treatment costs.
+  const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
+  const visitNotes = useLiveQuery(allVisitNotes, [], [] as VisitNote[]);
   const categories = useLiveQuery(liveCategories, [], [] as ExpenseCategory[]);
 
   const since = useMemo(() => {
@@ -70,6 +78,8 @@ export function MoneyScreen() {
   const purchaseTotal = inPeriod(purchases).reduce((sum, p) => sum + p.price, 0);
   const expenseTotal = inPeriod(expenses).reduce((sum, e) => sum + e.amount, 0);
   const healthTotal = inPeriod(health).reduce((sum, h) => sum + (h.cost ?? 0), 0);
+  // Only completed visits: a planned one is a journey nobody has made yet.
+  const calloutTotal = totalCallOutFees(inPeriod(visits));
   const farmProfit = salesTotal - purchaseTotal - expenseTotal;
 
   // SPEC 4.4 — the departure dates are what stop a sold animal carrying a full
@@ -81,6 +91,7 @@ export function MoneyScreen() {
 
   const perRecord = useMemo(() => {
     const periodExpenses = expenses.filter((e) => e.date >= since && e.date <= today);
+    const periodVisits = visits.filter((v) => v.date >= since && v.date <= today);
     return records
       .filter((r) => !r.deleted_at)
       .map((record) => {
@@ -94,11 +105,35 @@ export function MoneyScreen() {
           .filter((h) => h.record_id === record.id && !h.deleted_at)
           .reduce((sum, h) => sum + (h.cost ?? 0), 0);
         const share = expenseShareFor(record.id, periodExpenses, records, moves, departures);
-        return { record, sold, bought, treated, share, profit: sold - bought - treated - share };
+        // SPEC 14.3 — a direct cost, split evenly across the animals the visit
+        // saw, not spread by head-days the way feed is. A call-out is paid per
+        // journey, not per day of feeding.
+        const callout = callOutFeeFor(record.id, periodVisits, health, visitNotes);
+        return {
+          record,
+          sold,
+          bought,
+          treated,
+          callout,
+          share,
+          profit: sold - bought - treated - callout - share,
+        };
       })
-      .filter((row) => row.sold || row.bought || row.treated || row.share)
+      .filter((row) => row.sold || row.bought || row.treated || row.callout || row.share)
       .sort((a, b) => b.profit - a.profit);
-  }, [records, sales, purchases, health, expenses, moves, departures, since, today]);
+  }, [
+    records,
+    sales,
+    purchases,
+    health,
+    expenses,
+    visits,
+    visitNotes,
+    moves,
+    departures,
+    since,
+    today,
+  ]);
 
   const allocated = perRecord.reduce((sum, row) => sum + row.share, 0);
   const unallocated = expenseTotal - allocated;
@@ -156,6 +191,18 @@ export function MoneyScreen() {
           <Line label="Purchases" value={-purchaseTotal} />
           <Line label="Expenses" value={-expenseTotal} />
         </dl>
+
+        {calloutTotal > 0 && (
+          // SPEC 14.3 — the fee counts in the farm total, and the part of it
+          // that reached no animal is why the per-record figures below will not
+          // sum to it. Stated beside the total for the same reason treatments
+          // are: it is charged to records, not to the farm line.
+          <p className="text-body-md text-text-muted mt-3">
+            {formatUGX(calloutTotal)} of vet call-out fees was recorded over this
+            period, split evenly across the animals each visit saw. A visit with
+            no animals attached leaves its fee unallocated.
+          </p>
+        )}
 
         {healthTotal > 0 && (
           // SPEC 4.5's farm figure is sales less purchases less expenses.
@@ -231,7 +278,9 @@ export function MoneyScreen() {
                 </div>
                 <p className="text-body-md text-text-muted mt-1">
                   Sold {formatUGXShort(row.sold)} · bought {formatUGXShort(row.bought)} · treatments{" "}
-                  {formatUGXShort(row.treated)} · estimated share {formatUGXShort(row.share)}
+                  {formatUGXShort(row.treated)}
+                  {row.callout > 0 && <> · call-outs {formatUGXShort(row.callout)}</>} · estimated
+                  share {formatUGXShort(row.share)}
                 </p>
               </Link>
             </li>

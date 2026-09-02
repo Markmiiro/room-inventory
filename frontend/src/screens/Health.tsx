@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { CheckIcon, PlusIcon, WarningIcon } from "../components/Icons";
+import { CheckIcon, ChevronIcon, PlusIcon, WarningIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import { recordHealth } from "../db/mutations";
 import { activeRecords, allHealth, allSchedules } from "../db/queries";
@@ -120,6 +120,22 @@ export function HealthScreen() {
           History{history.length > 0 && ` · ${history.length}`}
         </Tab>
       </div>
+
+      {/* SPEC 14.5 — vet visits are reached from More and from here. A visit is
+          about health, and this is the screen someone is on when the vet is
+          standing in the room. */}
+      <Link
+        to="/visits"
+        className="card flex items-center justify-between gap-3 p-4 min-h-row mt-4"
+      >
+        <span className="min-w-0">
+          <span className="block text-body-lg font-semibold">Vet visits</span>
+          <span className="block text-body-md text-text-muted">
+            One date, one vet, several animals, one call-out fee
+          </span>
+        </span>
+        <ChevronIcon className="w-5 h-5 text-text-muted shrink-0" />
+      </Link>
 
       {tab === "due" && ageUnknown.length > 0 && <AgeUnknownNotice records={ageUnknown} />}
 

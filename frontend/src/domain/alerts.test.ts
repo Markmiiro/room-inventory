@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "../db/types";
+import type {
+  HealthRecord,
+  Move,
+  Record_,
+  Room,
+  TreatmentSchedule,
+  VetVisit,
+} from "../db/types";
 import { alertsForRecord, alertsForRoom, byPriority, computeAlerts, withdrawalEnd } from "./alerts";
 import { calendarEvents, monthGrid } from "./calendar";
 
@@ -99,6 +106,7 @@ function health(over: Partial<HealthRecord> = {}): HealthRecord {
     cost: null,
     notes: null,
     schedule_id: null,
+    visit_id: null,
     ...over,
   };
 }
@@ -579,3 +587,96 @@ describe("records with no date of birth — SPEC 13.4", () => {
   });
 });
 
+
+function vetVisit(over: Partial<VetVisit> = {}): VetVisit {
+  return {
+    id: "vis-1",
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    device_id: "d",
+    deleted_at: null,
+    date: "2026-09-04",
+    vet_id: "vet-1",
+    status: "planned",
+    call_out_fee: null,
+    reason: null,
+    notes: null,
+    ...over,
+  };
+}
+
+const VETS = [
+  {
+    id: "vet-1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    device_id: "d",
+    deleted_at: null,
+    name: "Dr Okello",
+    phone: null,
+    notes: null,
+  },
+];
+
+/** SPEC 14.2 — "It appears on the Calendar and in Alerts as it approaches." */
+describe("planned vet visits", () => {
+  it("names the vet and how long until the visit", () => {
+    // TODAY is 2026-09-01, so a visit on the 4th is three days out.
+    const alerts = run({ visits: [vetVisit({ date: "2026-09-04" })], vets: VETS });
+    const visitAlert = alerts.find((a) => a.kind === "planned_visit");
+
+    expect(visitAlert).toMatchObject({ priority: "this_week", date: "2026-09-04" });
+    expect(visitAlert!.title).toContain("Dr Okello");
+    expect(visitAlert!.title).toContain("3 days");
+  });
+
+  it("says nothing about a completed visit", () => {
+    const alerts = run({ visits: [vetVisit({ status: "completed" })], vets: VETS });
+    expect(alerts.filter((a) => a.kind === "planned_visit")).toEqual([]);
+  });
+
+  /**
+   * A planned visit whose date has gone by either happened and was never
+   * recorded, or did not happen and was never rebooked. Both need a person, so
+   * it is urgent rather than quietly dropped off the list.
+   */
+  it("raises an urgent alert for a planned visit whose date has passed", () => {
+    const alerts = run({ visits: [vetVisit({ date: "2026-08-20" })], vets: VETS });
+    const visitAlert = alerts.find((a) => a.kind === "planned_visit");
+
+    expect(visitAlert).toMatchObject({ priority: "urgent" });
+    expect(visitAlert!.detail).toContain("Mark it completed");
+  });
+
+  it("puts one more than a week out under Later", () => {
+    const alerts = run({ visits: [vetVisit({ date: "2026-09-20" })], vets: VETS });
+    expect(alerts.find((a) => a.kind === "planned_visit")!.priority).toBe("later");
+  });
+
+  it("says nothing about one further out than a month", () => {
+    const alerts = run({ visits: [vetVisit({ date: "2026-12-01" })], vets: VETS });
+    expect(alerts.filter((a) => a.kind === "planned_visit")).toEqual([]);
+  });
+
+  it("copes with a visit whose vet is not decided yet", () => {
+    // SPEC 14.2 — `vet_id` is null "if not yet decided".
+    const alerts = run({ visits: [vetVisit({ vet_id: null })], vets: VETS });
+    expect(alerts.find((a) => a.kind === "planned_visit")!.title).toContain("The vet");
+  });
+
+  it("carries the reason through, so the alert says what it is for", () => {
+    const alerts = run({
+      visits: [vetVisit({ reason: "Calf not feeding" })],
+      vets: VETS,
+    });
+    expect(alerts.find((a) => a.kind === "planned_visit")!.detail).toContain("Calf not feeding");
+  });
+
+  it("ignores a deleted visit", () => {
+    const alerts = run({
+      visits: [vetVisit({ deleted_at: "2026-08-25T00:00:00Z" })],
+      vets: VETS,
+    });
+    expect(alerts.filter((a) => a.kind === "planned_visit")).toEqual([]);
+  });
+});

@@ -15,6 +15,8 @@ import type {
   Sale,
   TreatmentSchedule,
   Vet,
+  VetVisit,
+  VisitNote,
 } from "../db/types";
 import { ApiError, pullChanges, pushOperations } from "./api";
 import { onLocalChange } from "./signal";
@@ -224,6 +226,8 @@ export class SyncEngine {
             db.customers,
             db.vets,
             db.treatmentSchedules,
+            db.vetVisits,
+            db.visitNotes,
             db.meta,
             db.outbox,
           ],
@@ -342,6 +346,18 @@ export async function applyServerRow(
       // whatever the server is offering and must not be written over (SPEC 5.5).
       if (queued > 0) return;
       await db.treatmentSchedules.put(data as unknown as TreatmentSchedule);
+      return;
+    }
+    case "vet_visit": {
+      // Also a state entity — a visit is marked completed and annotated after
+      // it is created (see `createVetVisit`), so the same rule applies.
+      if (queued > 0) return;
+      await db.vetVisits.put(data as unknown as VetVisit);
+      return;
+    }
+    case "visit_note": {
+      // An event: a pulled note can only ever be new.
+      await db.visitNotes.put(data as unknown as VisitNote);
       return;
     }
     default:

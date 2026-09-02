@@ -21,6 +21,8 @@ import { RecordDetailScreen } from "./screens/RecordDetail";
 import { RoomDetailScreen } from "./screens/RoomDetail";
 import { RoomsScreen } from "./screens/Rooms";
 import { SchedulesScreen } from "./screens/Schedules";
+import { VetVisitsScreen } from "./screens/VetVisits";
+import { VisitDetailScreen } from "./screens/VisitDetail";
 import { loadTokens } from "./sync/api";
 import { syncEngine } from "./sync/engine";
 
@@ -85,6 +87,8 @@ function AppShell() {
             <Route path="/customers" element={<ContactsScreen kind="customer" />} />
             <Route path="/vets" element={<ContactsScreen kind="vet" />} />
             <Route path="/schedules" element={<SchedulesScreen />} />
+            <Route path="/visits" element={<VetVisitsScreen />} />
+            <Route path="/visits/:visitId" element={<VisitDetailScreen />} />
             <Route path="/move" element={<MoveScreen />} />
             <Route path="*" element={<NotBuiltYet />} />
           </Routes>
@@ -117,6 +121,9 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/customers/, "Customers"],
   [/^\/vets/, "Vets"],
   [/^\/schedules/, "Manage schedules"],
+  // The detail pattern comes first: "/visits/abc" matches both.
+  [/^\/visits\/.+/, "Visit"],
+  [/^\/visits/, "Vet visits"],
   [/^\/move/, "Move"],
 ];
 

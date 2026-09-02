@@ -7,6 +7,8 @@ import type {
   Room,
   Sale,
   TreatmentSchedule,
+  Vet,
+  VetVisit,
 } from "../db/types";
 import { typeLabel } from "./alerts";
 import { scheduleDueItems } from "./schedules";
@@ -24,7 +26,7 @@ import { scheduleDueItems } from "./schedules";
  * has not.
  */
 
-export type CalendarKind = "treatment" | "purchase" | "sale" | "move" | "death";
+export type CalendarKind = "treatment" | "purchase" | "sale" | "move" | "death" | "visit";
 
 export interface CalendarEvent {
   id: string;
@@ -46,6 +48,7 @@ export const KIND_LABEL: Record<CalendarKind, string> = {
   sale: "Sales",
   move: "Moves",
   death: "Deaths",
+  visit: "Vet visits",
 };
 
 export interface CalendarInputs {
@@ -59,6 +62,9 @@ export interface CalendarInputs {
   /** SPEC 16 — the calendar gains scheduled treatments. Defaulted so existing
    *  callers keep working unchanged. */
   schedules?: TreatmentSchedule[];
+  /** SPEC 16 — the calendar gains planned vet visits. */
+  visits?: VetVisit[];
+  vets?: Vet[];
   today: string;
 }
 
@@ -174,6 +180,28 @@ export function calendarEvents(inputs: CalendarInputs): CalendarEvent[] {
       detail: `${name(item.record.id)} · from ${item.schedule.name}`,
       recordId: item.record.id,
       scheduled: true,
+    });
+  }
+
+  /**
+   * SPEC 14.5 and 16 — vet visits on the calendar.
+   *
+   * Both kinds appear. A planned visit is the actionable one and is marked
+   * `scheduled`; a completed one is history, and belongs on its date the same
+   * way a treatment does. A visit is about the farm rather than one animal, so
+   * it carries no `recordId` — the animals it saw are on the visit itself.
+   */
+  const vetName = new Map((inputs.vets ?? []).map((v) => [v.id, v.name]));
+  for (const visit of inputs.visits ?? []) {
+    if (visit.deleted_at) continue;
+    const who = (visit.vet_id && vetName.get(visit.vet_id)) || "Vet";
+    events.push({
+      id: `visit:${visit.id}`,
+      kind: "visit",
+      date: visit.date,
+      title: visit.status === "planned" ? `${who} visit planned` : `${who} visit`,
+      detail: visit.reason ?? (visit.status === "planned" ? "Planned" : "Completed"),
+      scheduled: visit.status === "planned",
     });
   }
 

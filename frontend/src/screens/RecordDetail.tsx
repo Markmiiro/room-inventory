@@ -11,6 +11,7 @@ import {
   healthForRecord,
   liveRooms,
   movesForRecord,
+  visitNotesForRecord,
 } from "../db/queries";
 import { db } from "../db/schema";
 import type {
@@ -21,6 +22,9 @@ import type {
   Room,
   Sex,
   TreatmentSchedule,
+  Vet,
+  VetVisit,
+  VisitNote,
 } from "../db/types";
 import { AGE_UNKNOWN_CHIP, AGE_UNKNOWN_DETAIL, isAgeUnknown } from "../domain/age";
 import { formatDate, formatUGX, headUnit, plural } from "../domain/format";
@@ -78,6 +82,15 @@ export function RecordDetailScreen() {
   const children = useLiveQuery(() => childRecords(recordId), [recordId], [] as Record_[]);
   const health = useLiveQuery(() => healthForRecord(recordId), [recordId], [] as HealthRecord[]);
   const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
+  // SPEC 14.5 — this record's observations, and the visits behind its
+  // treatments so each can be shown with the vet's name.
+  const visitNotes = useLiveQuery(
+    () => visitNotesForRecord(recordId),
+    [recordId],
+    [] as VisitNote[],
+  );
+  const visits = useLiveQuery(() => db.vetVisits.toArray(), [], [] as VetVisit[]);
+  const vets = useLiveQuery(() => db.vets.toArray(), [], [] as Vet[]);
   const parent = useLiveQuery(
     () => (record?.parent_record_id ? db.records.get(record.parent_record_id) : undefined),
     [record?.parent_record_id],
@@ -290,7 +303,12 @@ export function RecordDetailScreen() {
       <div className="mt-6 flex items-center justify-between gap-3">
         <h2 className="text-headline-sm text-primary">
           Health
-          {health.length > 0 && <span className="text-text-muted font-normal"> · {health.length}</span>}
+          {health.length + visitNotes.length > 0 && (
+            <span className="text-text-muted font-normal">
+              {" "}
+              · {health.length + visitNotes.length}
+            </span>
+          )}
         </h2>
         <Link to="/health" className="btn-quiet">
           Log treatment
@@ -301,15 +319,29 @@ export function RecordDetailScreen() {
           is coming is the actionable half; the history below is the record. */}
       <UpcomingSection record={record} schedules={schedules} health={health} />
 
-      {health.length === 0 ? (
+      {/* SPEC 14.5 — treatments and the vet's observations in one history,
+          ordered by date. They are two different things and are drawn
+          differently, but they happened to the same animal on the same
+          timeline, and splitting them into two lists would hide that the vet
+          who looked at this animal in March is the one who treated it in May. */}
+      {health.length === 0 && visitNotes.length === 0 ? (
         <p className="card p-6 mt-3 text-body-md text-text-muted text-center">
-          Nothing has been given to {record.tag} yet.
+          Nothing has been given to {record.tag} yet, and no vet has noted anything
+          about it.
         </p>
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
-          {health.map((treatment) => (
-            <li key={treatment.id}>
-              <TreatmentRow treatment={treatment} />
+          {healthTimeline(health, visitNotes, visits).map((entry) => (
+            <li key={entry.key}>
+              {entry.kind === "treatment" ? (
+                <TreatmentRow
+                  treatment={entry.treatment}
+                  visit={entry.visit}
+                  vets={vets}
+                />
+              ) : (
+                <ObservationRow note={entry.note} visit={entry.visit} vets={vets} />
+              )}
             </li>
           ))}
         </ul>
@@ -330,10 +362,22 @@ export function RecordDetailScreen() {
   );
 }
 
-function TreatmentRow({ treatment }: { treatment: HealthRecord }) {
+function TreatmentRow({
+  treatment,
+  visit,
+  vets,
+}: {
+  treatment: HealthRecord;
+  visit: VetVisit | null;
+  vets: Vet[];
+}) {
   const today = todayInEAT();
   const end = withdrawalEnd(treatment);
   const overdue = treatment.next_due !== null && treatment.next_due < today;
+  // The vet named on the visit, falling back to the one named on the treatment
+  // itself for a dose given without a visit.
+  const vetId = visit?.vet_id ?? treatment.vet_id;
+  const vetName = vets.find((v) => v.id === vetId)?.name ?? null;
 
   return (
     <div className="card p-4">
@@ -344,6 +388,15 @@ function TreatmentRow({ treatment }: { treatment: HealthRecord }) {
         <span className="data-label shrink-0">{formatDate(treatment.date)}</span>
       </div>
 
+      {/* SPEC 14.5 — a visit-linked treatment shows the vet's name, so a dose
+          somebody gave themselves and one a vet gave are told apart. */}
+      {visit && (
+        <p className="text-body-md mt-1">
+          <Link to={`/visits/${visit.id}`} className="text-primary font-semibold underline">
+            {vetName ? `${vetName}'s visit` : "Vet visit"}
+          </Link>
+        </p>
+      )}
       <p className="text-body-md text-text-muted mt-1">
         {typeLabel(treatment.type)}
         {treatment.dose ? ` · ${treatment.dose}` : ""}
@@ -513,6 +566,7 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
                 ? "Treatment schedules and sale readiness are worked out from this."
                 : "Without this, no treatment schedule runs for this animal and no sale readiness is shown. The arrival date is not used instead — it says when it got here, not how old it is."}
             </p>
+
             <label className="data-label block mt-4 mb-1" htmlFor="edit-offspring">
               {sex === "male" ? "Offspring sired" : "Offspring"}
             </label>
@@ -626,3 +680,90 @@ function UpcomingSection({
   );
 }
 
+
+/**
+ * SPEC 14.4 — an observation, drawn so it cannot be read as a treatment.
+ *
+ * "The vet looked at this one and said watch it" is a real event in an animal's
+ * health history, and it is emphatically not a dose. Nothing was given, so
+ * there is no product, no withdrawal and no next due — and the row says
+ * "looked at" rather than leaving those simply absent, which would read as a
+ * treatment somebody forgot to fill in.
+ */
+function ObservationRow({
+  note,
+  visit,
+  vets,
+}: {
+  note: VisitNote;
+  visit: VetVisit | null;
+  vets: Vet[];
+}) {
+  const vetName = vets.find((v) => v.id === visit?.vet_id)?.name ?? null;
+
+  return (
+    <div className="card border-l-4 border-border p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 min-w-0">
+          <span className="chip bg-background text-text-muted border border-border">looked at</span>
+          <span className="text-body-md text-text-muted truncate">
+            {vetName ? `${vetName} — nothing given` : "Nothing given"}
+          </span>
+        </p>
+        {visit && <span className="data-label shrink-0">{formatDate(visit.date)}</span>}
+      </div>
+      <p className="text-body-md mt-2 whitespace-pre-wrap">{note.note}</p>
+      {visit && (
+        <Link
+          to={`/visits/${visit.id}`}
+          className="text-body-md font-semibold text-primary underline mt-2 inline-block"
+        >
+          Open the visit
+        </Link>
+      )}
+    </div>
+  );
+}
+
+type TimelineEntry =
+  | { kind: "treatment"; key: string; date: string; treatment: HealthRecord; visit: VetVisit | null }
+  | { kind: "observation"; key: string; date: string; note: VisitNote; visit: VetVisit | null };
+
+/**
+ * Treatments and observations on one timeline, newest first.
+ *
+ * A note carries no date of its own — it belongs to a visit, and the visit's
+ * date is the day it happened. A note whose visit is missing falls back to when
+ * it was written, so it still lands somewhere sensible rather than at the epoch.
+ */
+function healthTimeline(
+  health: HealthRecord[],
+  notes: VisitNote[],
+  visits: VetVisit[],
+): TimelineEntry[] {
+  const visitById = new Map(visits.filter((v) => !v.deleted_at).map((v) => [v.id, v]));
+
+  const entries: TimelineEntry[] = [
+    ...health.map((treatment) => ({
+      kind: "treatment" as const,
+      key: `t:${treatment.id}`,
+      date: treatment.date,
+      treatment,
+      visit: treatment.visit_id ? visitById.get(treatment.visit_id) ?? null : null,
+    })),
+    ...notes.map((note) => {
+      const visit = visitById.get(note.visit_id) ?? null;
+      return {
+        kind: "observation" as const,
+        key: `n:${note.id}`,
+        date: visit?.date ?? note.created_at.slice(0, 10),
+        note,
+        visit,
+      };
+    }),
+  ];
+
+  return entries.sort((a, b) =>
+    a.date === b.date ? b.key.localeCompare(a.key) : b.date.localeCompare(a.date),
+  );
+}

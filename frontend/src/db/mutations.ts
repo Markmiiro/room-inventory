@@ -22,6 +22,9 @@ import type {
   Source,
   Species,
   TreatmentSchedule,
+  VetVisit,
+  VisitNote,
+  VisitStatus,
 } from "./types";
 
 /**
@@ -45,7 +48,9 @@ type Entity =
   | Death
   | Expense
   | ExpenseCategory
-  | TreatmentSchedule;
+  | TreatmentSchedule
+  | VetVisit
+  | VisitNote;
 
 async function enqueue(
   tx: { outbox: typeof db.outbox },
@@ -531,6 +536,8 @@ export interface HealthInput {
   /** SPEC 13.3 — the schedule this dose satisfies. Set when the treatment was
    *  logged from a due item; left null for an ad-hoc one. */
   schedule_id?: string | null;
+  /** SPEC 14.2 — the visit this was given during. Null when self-administered. */
+  visit_id?: string | null;
 }
 
 /**
@@ -563,6 +570,9 @@ export async function recordHealth(input: HealthInput): Promise<HealthRecord> {
     // SPEC 13.3 — an ad-hoc treatment carries null here and so does not move
     // any schedule's next date. Only a dose logged against a due item does.
     schedule_id: input.schedule_id ?? null,
+    // SPEC 14.2 — set only when the dose was given during a visit, which is
+    // also what makes the animal count as seen for the call-out fee split.
+    visit_id: input.visit_id ?? null,
   };
 
   await db.transaction("rw", db.healthRecords, db.outbox, async () => {
@@ -579,6 +589,7 @@ export async function recordHealth(input: HealthInput): Promise<HealthRecord> {
       cost: treatment.cost,
       notes: treatment.notes,
       schedule_id: treatment.schedule_id,
+      visit_id: treatment.visit_id,
     });
   });
 
@@ -928,3 +939,142 @@ function scheduleFields(schedule: TreatmentSchedule): Record<string, unknown> {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Vet visits — SPEC 14
+// ---------------------------------------------------------------------------
+
+export interface VetVisitInput {
+  date: string;
+  vet_id?: string | null;
+  status?: VisitStatus;
+  call_out_fee?: number | null;
+  reason?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * Create a visit.
+ *
+ * **A state entity, not an event — a deliberate departure from SPEC 16.**
+ *
+ * SPEC 16's sync note says "Visits and visit notes are events, append-only".
+ * That cannot be built as written. SPEC 14.2 gives a visit a `status` of
+ * `planned` or `completed` and describes the working pattern as "create the
+ * visit, add treatments as they happen, mark completed" — marking completed is
+ * an update to an existing row. The same is true of the two fields the vet
+ * leaves behind: the call-out fee and "what the vet said" are both written
+ * after the visit, onto a row that already exists. An append-only visit would
+ * make every one of those a new visit, and a farm with one call-out would end
+ * up with three rows for it and the fee counted three times.
+ *
+ * So a visit carries `field_versions` and merges per field like a room or a
+ * schedule (SPEC 5.4). That is also the behaviour the farm needs: one person
+ * marking a visit completed and another typing up the vet's advice must not
+ * cost each other their work.
+ *
+ * `VisitNote` genuinely is an event, and is built as one — it is written once,
+ * about one animal, and corrected by adding another note.
+ */
+export async function createVetVisit(input: VetVisitInput): Promise<VetVisit> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  const visit: VetVisit = {
+    id: newId(),
+    created_at: at,
+    updated_at: at,
+    device_id,
+    deleted_at: null,
+    date: input.date,
+    vet_id: input.vet_id ?? null,
+    // SPEC 14.2 — "called out" starts completed and "scheduled" starts planned.
+    status: input.status ?? "completed",
+    call_out_fee: input.call_out_fee ?? null,
+    reason: input.reason?.trim() || null,
+    notes: input.notes?.trim() || null,
+  };
+
+  await db.transaction("rw", db.vetVisits, db.outbox, async () => {
+    await db.vetVisits.add(visit);
+    await enqueue(db, "upsert", "vet_visit", visit, visitFields(visit));
+  });
+
+  return visit;
+}
+
+export type VetVisitEdit = Partial<
+  Pick<VetVisit, "date" | "vet_id" | "status" | "call_out_fee" | "reason" | "notes">
+>;
+
+export async function updateVetVisit(id: string, changes: VetVisitEdit): Promise<void> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  await db.transaction("rw", db.vetVisits, db.outbox, async () => {
+    const existing = await db.vetVisits.get(id);
+    if (!existing) throw new Error(`No visit ${id}`);
+
+    const real = changedOnly(existing, changes);
+    if (Object.keys(real).length === 0) return;
+
+    const updated: VetVisit = { ...existing, ...real, updated_at: at, device_id };
+    await db.vetVisits.put(updated);
+    // Per field, for the same reason as every other state entity: sending an
+    // untouched field would let this device's stale copy beat another device's
+    // real edit to it (SPEC 5.4).
+    await enqueue(db, "upsert", "vet_visit", updated, real as Record<string, unknown>);
+  });
+}
+
+function visitFields(visit: VetVisit): Record<string, unknown> {
+  return {
+    date: visit.date,
+    vet_id: visit.vet_id,
+    status: visit.status,
+    call_out_fee: visit.call_out_fee,
+    reason: visit.reason,
+    notes: visit.notes,
+  };
+}
+
+export interface VisitNoteInput {
+  visit_id: string;
+  record_id: string;
+  note: string;
+}
+
+/**
+ * SPEC 14.4 — record that the vet looked at an animal without treating it.
+ *
+ * An event: written once, never edited. It exists so "the vet looked at this
+ * one and said watch it" can be recorded without inventing a treatment that
+ * never happened — and it counts that animal as seen, so it takes its share of
+ * the call-out fee (SPEC 14.3).
+ */
+export async function recordVisitNote(input: VisitNoteInput): Promise<VisitNote> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  const note: VisitNote = {
+    id: newId(),
+    created_at: at,
+    updated_at: at,
+    device_id,
+    deleted_at: null,
+    visit_id: input.visit_id,
+    record_id: input.record_id,
+    note: input.note.trim(),
+  };
+
+  await db.transaction("rw", db.visitNotes, db.outbox, async () => {
+    await db.visitNotes.add(note);
+    await enqueue(db, "insert", "visit_note", note, {
+      visit_id: note.visit_id,
+      record_id: note.record_id,
+      note: note.note,
+    });
+  });
+
+  return note;
+}

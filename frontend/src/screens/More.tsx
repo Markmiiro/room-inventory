@@ -63,6 +63,11 @@ export function MoreScreen() {
           title="Health"
           detail="Treatments due, and everything given"
         />
+        <Row
+          to="/visits"
+          title="Vet visits"
+          detail="Call-outs and planned visits, and what they cost"
+        />
       </Group>
 
       <Group title="Configuration">

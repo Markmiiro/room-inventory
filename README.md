@@ -231,6 +231,24 @@ selling, so it could not be tested without them. `Purchase` is fully wired —
 SPEC 3.7 says one is created automatically whenever a record is added with
 `source = bought`, so Add or purchase could not be honest without it.
 
+### Why a vet visit is a state entity
+
+Worth knowing, because an earlier draft of SPEC 16 said the opposite and the
+spec was amended rather than the code.
+
+SPEC 14.2 gives a visit a `status` that moves from `planned` to `completed`, and
+its call-out fee and the vet's advice are both written afterwards onto a row
+that already exists. An append-only visit would turn each of those into a *new*
+visit, so one call-out would be counted several times and its fee split several
+times over. So `VetVisit` carries `field_versions` and merges per field like a
+room — which is also what the work needs, since one person marking a visit
+completed and another typing up the advice must not overwrite each other
+(SPEC 5.4).
+
+`VisitNote` has none of that. It is written once, about one animal, on one
+visit, and corrected by adding another note. It is an event, and two devices
+noting the same animal keep both notes.
+
 ### Deliberately not built, and named so it stays visible
 
 SPEC 17 lists four gaps that are decisions rather than oversights. They are

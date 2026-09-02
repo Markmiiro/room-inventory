@@ -99,6 +99,9 @@ export interface HealthRecord extends SyncFields {
    *  due item. Null for an ad-hoc treatment: a sick animal treated out of turn
    *  must not shift any schedule's next date. */
   schedule_id: string | null;
+  /** SPEC 14.2 — the visit this treatment was given during. Null for a
+   *  self-administered one, which is how the farm works most days. */
+  visit_id: string | null;
 }
 
 /** SPEC 3.8 — a sale. A group sold in parts carries several. */
@@ -192,6 +195,48 @@ export interface Expense extends SyncFields {
   note: string | null;
 }
 
+/** SPEC 14.2 — a planned visit is a future date; a completed one has happened. */
+export type VisitStatus = "planned" | "completed";
+
+/**
+ * SPEC 14.2 — one visit from the vet.
+ *
+ * A real visit is one date, one vet, several animals, some treated and some
+ * only looked at, and a single call-out fee for the lot. A treatment is one
+ * animal and one product, so none of that fits on a HealthRecord — which is why
+ * this exists rather than more fields on the treatment.
+ *
+ * It is a **state** entity rather than an event, which is a deliberate
+ * departure from SPEC 16's sync note; see the comment on `createVetVisit` in
+ * `db/mutations.ts` for why an append-only visit cannot be marked completed.
+ */
+export interface VetVisit extends SyncFields {
+  /** May be in the future, for a planned visit (SPEC 14.2). */
+  date: string;
+  vet_id: string | null;
+  status: VisitStatus;
+  /** Whole shillings. The fee for the journey, separate from any treatment
+   *  cost (SPEC 14.3). */
+  call_out_fee: number | null;
+  reason: string | null;
+  notes: string | null;
+}
+
+/**
+ * SPEC 14.4 — the vet looked at this one and said watch it.
+ *
+ * An observation rather than a treatment. It exists so that "seen but not
+ * treated" can be recorded without inventing a dose that was never given, and
+ * it counts the animal as seen for the fee split.
+ *
+ * A genuine event: written once, about one animal, on one visit.
+ */
+export interface VisitNote extends SyncFields {
+  visit_id: string;
+  record_id: string;
+  note: string;
+}
+
 export type EntityName =
   | "room"
   | "record"
@@ -204,7 +249,9 @@ export type EntityName =
   | "customer"
   | "vet"
   | "expense"
-  | "treatment_schedule";
+  | "treatment_schedule"
+  | "vet_visit"
+  | "visit_note";
 
 /** One queued mutation. SPEC 5.1. */
 export interface OutboxOperation {
