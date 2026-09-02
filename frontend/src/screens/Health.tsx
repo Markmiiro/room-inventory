@@ -4,13 +4,35 @@ import { Link } from "react-router-dom";
 import { CheckIcon, PlusIcon, WarningIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import { recordHealth } from "../db/mutations";
-import { activeRecords, allHealth } from "../db/queries";
-import type { HealthRecord, HealthType, Record_ } from "../db/types";
+import { activeRecords, allHealth, allSchedules } from "../db/queries";
+import type { HealthRecord, HealthType, Record_, TreatmentSchedule } from "../db/types";
+import { recordsWithUnknownAge } from "../domain/age";
 import { typeLabel, withdrawalEnd } from "../domain/alerts";
-import { daysBetween, formatDate, formatUGX } from "../domain/format";
+import { daysBetween, formatDate, formatUGX, plural } from "../domain/format";
+import { durationInWords, scheduleDueItems, type DueItem } from "../domain/schedules";
 import { useLiveQuery } from "../sync/useSync";
 
 const TYPES: HealthType[] = ["vaccination", "deworming", "treatment", "vitamin", "other"];
+
+/**
+ * One row of the Due list, from either source.
+ *
+ * A hand-typed `next_due` and a schedule-derived date are the same thing to the
+ * person reading the screen — something that needs doing, on a day. They differ
+ * only in where the date came from, which is what `schedule` records and what
+ * the chip says out loud (SPEC 13.6).
+ */
+interface DueRow {
+  key: string;
+  recordId: string;
+  title: string;
+  subtitle: string;
+  days: number;
+  /** Null for a hand-typed due date. */
+  schedule: TreatmentSchedule | null;
+  /** Present on scheduled rows, so logging one can carry the schedule through. */
+  item?: DueItem;
+}
 
 /**
  * Health — what is due, and what has been given.
@@ -22,26 +44,66 @@ const TYPES: HealthType[] = ["vaccination", "deworming", "treatment", "vitamin",
 export function HealthScreen() {
   const records = useLiveQuery(activeRecords, [], [] as Record_[]);
   const health = useLiveQuery(allHealth, [], [] as HealthRecord[]);
+  const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
   const [tab, setTab] = useState<"due" | "history">("due");
-  const [logging, setLogging] = useState<Record_ | null>(null);
+  const [logging, setLogging] = useState<{ record: Record_; from?: DueItem } | null>(null);
   const [picking, setPicking] = useState(false);
 
   const byRecord = useMemo(() => new Map(records.map((r) => [r.id, r])), [records]);
   const today = todayInEAT();
 
-  // Only the treatments of animals still on the farm can be due (SPEC 6.2).
-  const due = useMemo(
-    () =>
-      health
-        .filter((h) => h.next_due && byRecord.has(h.record_id))
-        .map((h) => ({ treatment: h, days: daysBetween(today, h.next_due!) }))
-        .sort((a, b) => a.days - b.days),
-    [health, byRecord, today],
-  );
+  /**
+   * Due comes from two places and is shown as one list.
+   *
+   * SPEC 13.6 — scheduled items "appear alongside manually-dated ones, each
+   * carrying a small chip naming its schedule so it is clear where the date
+   * came from". A farm partway through adopting schedules has both kinds at
+   * once, and splitting them into two lists would make the user check two
+   * places for one question.
+   *
+   * The rules themselves are in `domain/schedules.ts`, not here — the Alerts
+   * screen, the record detail and the calendar read exactly the same answers.
+   */
+  const due = useMemo<DueRow[]>(() => {
+    const manual: DueRow[] = health
+      .filter((h) => h.next_due && byRecord.has(h.record_id))
+      .map((h) => ({
+        key: `manual:${h.id}`,
+        recordId: h.record_id,
+        title: h.product ?? typeLabel(h.type),
+        subtitle: `${typeLabel(h.type)}${h.dose ? ` \u00b7 ${h.dose}` : ""}`,
+        days: daysBetween(today, h.next_due!),
+        schedule: null,
+      }));
+
+    const scheduled: DueRow[] = scheduleDueItems({
+      records,
+      schedules,
+      health,
+      today,
+    }).map((item) => ({
+      key: `scheduled:${item.id}`,
+      recordId: item.record.id,
+      title: item.schedule.default_product ?? item.schedule.name,
+      subtitle: `${typeLabel(item.schedule.type)}${
+        item.lastGiven ? ` \u00b7 last given ${formatDate(item.lastGiven.date)}` : " \u00b7 first dose"
+      }`,
+      days: item.days,
+      schedule: item.schedule,
+      item,
+    }));
+
+    return [...manual, ...scheduled].sort((a, b) => a.days - b.days);
+  }, [health, records, schedules, byRecord, today]);
 
   const overdue = due.filter((d) => d.days < 0);
   const thisWeek = due.filter((d) => d.days >= 0 && d.days <= 7);
   const later = due.filter((d) => d.days > 7);
+
+  // SPEC 13.4 — the records no schedule can reach. Named on the screen whose
+  // job is "what is due", because their absence from that list is exactly the
+  // silent failure the spec is warning about.
+  const ageUnknown = useMemo(() => recordsWithUnknownAge(records), [records]);
 
   const history = useMemo(
     () => [...health].sort((a, b) => b.date.localeCompare(a.date)),
@@ -59,11 +121,13 @@ export function HealthScreen() {
         </Tab>
       </div>
 
+      {tab === "due" && ageUnknown.length > 0 && <AgeUnknownNotice records={ageUnknown} />}
+
       {tab === "due" ? (
         due.length === 0 ? (
           <Empty>
-            Nothing is due. A treatment appears here once it is logged with a next
-            due date.
+            Nothing is due. Treatments appear here from a schedule, or once one is
+            logged with a next due date by hand.
           </Empty>
         ) : (
           <>
@@ -105,11 +169,18 @@ export function HealthScreen() {
           onClose={() => setPicking(false)}
           onPick={(record) => {
             setPicking(false);
-            setLogging(record);
+            // Picked cold, so no schedule: an ad-hoc treatment (SPEC 13.3).
+            setLogging({ record });
           }}
         />
       )}
-      {logging && <LogTreatmentDialog record={logging} onClose={() => setLogging(null)} />}
+      {logging && (
+        <LogTreatmentDialog
+          record={logging.record}
+          from={logging.from}
+          onClose={() => setLogging(null)}
+        />
+      )}
     </div>
   );
 }
@@ -123,9 +194,9 @@ function DueSection({
 }: {
   title: string;
   urgent?: boolean;
-  rows: Array<{ treatment: HealthRecord; days: number }>;
+  rows: DueRow[];
   byRecord: Map<string, Record_>;
-  onLog: (record: Record_) => void;
+  onLog: (target: { record: Record_; from?: DueItem }) => void;
 }) {
   if (rows.length === 0) return null;
 
@@ -136,37 +207,42 @@ function DueSection({
         {title}
       </h2>
       <ul className="mt-2 grid gap-2 md:grid-cols-2">
-        {rows.map(({ treatment, days }) => {
-          const record = byRecord.get(treatment.record_id);
+        {rows.map((row) => {
+          const record = byRecord.get(row.recordId);
+          const { days } = row;
           return (
-            <li key={treatment.id}>
+            <li key={row.key}>
               <div className={`card border-l-4 p-4 h-full ${urgent ? "border-alert" : "border-action"}`}>
                 <p className="flex flex-wrap items-center gap-2">
-                  <Link to={`/records/${treatment.record_id}`} className="data-value font-bold underline">
+                  <Link to={`/records/${row.recordId}`} className="data-value font-bold underline">
                     {record?.tag ?? "A record"}
                   </Link>
                   <span
                     className={`chip ${urgent ? "bg-alert-bg text-alert-text" : "bg-success text-success-text"}`}
                   >
                     {days < 0
-                      ? `${-days} ${-days === 1 ? "day" : "days"} overdue`
+                      ? `${-days} ${plural(-days, "day")} overdue`
                       : days === 0
                         ? "Due today"
-                        : `Due in ${days} ${days === 1 ? "day" : "days"}`}
+                        : `Due in ${days} ${plural(days, "day")}`}
                   </span>
+                  {/* SPEC 13.6 — where the date came from, in words. Without it
+                      a schedule-derived date is indistinguishable from one
+                      somebody typed, and only one of the two can be corrected
+                      by editing the treatment. */}
+                  {row.schedule && (
+                    <span className="chip bg-background text-text-muted border border-border">
+                      From {row.schedule.name}
+                    </span>
+                  )}
                 </p>
-                <p className="text-body-lg font-semibold mt-1">
-                  {treatment.product ?? typeLabel(treatment.type)}
-                </p>
-                <p className="text-body-md text-text-muted">
-                  {typeLabel(treatment.type)}
-                  {treatment.dose ? ` · ${treatment.dose}` : ""}
-                </p>
+                <p className="text-body-lg font-semibold mt-1">{row.title}</p>
+                <p className="text-body-md text-text-muted">{row.subtitle}</p>
                 {record && (
                   <button
                     type="button"
                     className="btn-secondary w-full mt-3"
-                    onClick={() => onLog(record)}
+                    onClick={() => onLog({ record, from: row.item })}
                   >
                     Log it
                   </button>
@@ -177,6 +253,49 @@ function DueSection({
         })}
       </ul>
     </section>
+  );
+}
+
+/**
+ * SPEC 13.4 — the records that fire no schedule, said plainly.
+ *
+ * This sits above the Due list rather than inside it, because these records
+ * have nothing due — that is the problem. Putting them in the list would mean
+ * inventing a date for them, which 13.4 forbids in as many words.
+ */
+function AgeUnknownNotice({ records }: { records: Record_[] }) {
+  const animals = records.filter((r) => r.kind === "animal").length;
+  const groups = records.length - animals;
+
+  return (
+    <div className="card border-l-4 border-action p-4 mt-4">
+      <p className="text-body-lg font-semibold">
+        {records.length} {plural(records.length, "record")} cannot be scheduled
+      </p>
+      <p className="text-body-md text-text-muted mt-1">
+        {animals > 0 &&
+          `${animals} ${plural(animals, "animal")} ${animals === 1 ? "has" : "have"} no date of birth`}
+        {animals > 0 && groups > 0 && ", and "}
+        {groups > 0 &&
+          `${groups} ${plural(groups, "group")} ${groups === 1 ? "has" : "have"} no arrival date`}
+        . Without one their age cannot be worked out, so no schedule runs for them.
+      </p>
+      <ul className="mt-3 flex flex-wrap gap-2">
+        {records.slice(0, 12).map((record) => (
+          <li key={record.id}>
+            <Link
+              to={`/records/${record.id}`}
+              className="chip bg-background text-text border border-border underline"
+            >
+              {record.tag}
+            </Link>
+          </li>
+        ))}
+        {records.length > 12 && (
+          <li className="chip text-text-muted">and {records.length - 12} more</li>
+        )}
+      </ul>
+    </div>
   );
 }
 
@@ -267,13 +386,36 @@ function PickRecordDialog({
   );
 }
 
-function LogTreatmentDialog({ record, onClose }: { record: Record_; onClose: () => void }) {
-  const [type, setType] = useState<HealthType>("vaccination");
-  const [product, setProduct] = useState("");
+/**
+ * Log a treatment, optionally against the schedule it satisfies.
+ *
+ * `from` is the due item this was opened from. When it is present the schedule
+ * pre-fills the form and — the part that matters — the saved treatment carries
+ * `schedule_id`. That is the whole mechanism behind SPEC 13.3's interval rule:
+ * the next dose is counted forward from the `date` typed here, so a treatment
+ * given early moves the next one earlier by exactly as much.
+ *
+ * Opened without `from`, nothing is stamped and the schedule is untouched. A
+ * sick animal dewormed out of turn must not silently reset the herd's plan.
+ */
+function LogTreatmentDialog({
+  record,
+  from,
+  onClose,
+}: {
+  record: Record_;
+  from?: DueItem;
+  onClose: () => void;
+}) {
+  const schedule = from?.schedule ?? null;
+  const [type, setType] = useState<HealthType>(schedule?.type ?? "vaccination");
+  const [product, setProduct] = useState(schedule?.default_product ?? "");
   const [dose, setDose] = useState("");
   const [date, setDate] = useState(todayInEAT());
   const [nextDue, setNextDue] = useState("");
-  const [withdrawal, setWithdrawal] = useState("");
+  const [withdrawal, setWithdrawal] = useState(
+    schedule?.default_withdrawal_days == null ? "" : String(schedule.default_withdrawal_days),
+  );
   const [cost, setCost] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -305,6 +447,9 @@ function LogTreatmentDialog({ record, onClose }: { record: Record_; onClose: () 
       withdrawal_days: days,
       cost: shillings,
       notes: notes || null,
+      // The link back to the rule. Null when this was not opened from a due
+      // item, which is what keeps an ad-hoc dose out of the schedule (SPEC 13.3).
+      schedule_id: schedule?.id ?? null,
     });
     onClose();
   }
@@ -312,6 +457,17 @@ function LogTreatmentDialog({ record, onClose }: { record: Record_; onClose: () 
   return (
     <Dialog label="Log a treatment" onClose={onClose}>
       <h2 className="text-headline-sm text-primary">Treat {record.tag}</h2>
+
+      {schedule && (
+        <p className="mt-3 rounded-lg bg-background text-body-md p-3">
+          Against <span className="font-semibold">{schedule.name}</span>.{" "}
+          {schedule.repeat_every_days == null
+            ? "This schedule does not repeat, so nothing further will become due."
+            : `The next one is counted from the day you enter below, not from the day it was planned \u2014 so ${durationInWords(
+                schedule.repeat_every_days,
+              )} after that date.`}
+        </p>
+      )}
 
       <fieldset className="mt-4">
         <legend className="data-label mb-2">Type</legend>

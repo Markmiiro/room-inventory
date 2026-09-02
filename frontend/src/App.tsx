@@ -4,7 +4,7 @@ import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { BackIcon, CloseIcon } from "./components/Icons";
 import { BottomNav, SideNav } from "./components/Nav";
 import { SyncIndicator } from "./components/SyncIndicator";
-import { seedRoomsIfEmpty } from "./db/seed";
+import { seedRoomsIfEmpty, seedSchedulesIfEmpty } from "./db/seed";
 import { AddPurchaseScreen } from "./screens/AddPurchase";
 import { AlertsScreen } from "./screens/Alerts";
 import { AnimalsScreen } from "./screens/Animals";
@@ -20,6 +20,7 @@ import { MoveScreen } from "./screens/Move";
 import { RecordDetailScreen } from "./screens/RecordDetail";
 import { RoomDetailScreen } from "./screens/RoomDetail";
 import { RoomsScreen } from "./screens/Rooms";
+import { SchedulesScreen } from "./screens/Schedules";
 import { loadTokens } from "./sync/api";
 import { syncEngine } from "./sync/engine";
 
@@ -45,10 +46,15 @@ function AppShell() {
   useEffect(() => {
     // SPEC 6.10 — the ten rooms exist before anything else runs, with no
     // network involved.
-    void seedRoomsIfEmpty().then(() => {
-      loadTokens();
-      syncEngine.start();
-    });
+    // SPEC 6.10 and 13.5 — both seeds run before sync starts, with no network
+    // involved, so a first open offline has its ten rooms and its eight starter
+    // schedules rather than an empty screen.
+    void seedRoomsIfEmpty()
+      .then(seedSchedulesIfEmpty)
+      .then(() => {
+        loadTokens();
+        syncEngine.start();
+      });
     return () => syncEngine.stop();
   }, []);
 
@@ -78,6 +84,7 @@ function AppShell() {
             <Route path="/more" element={<MoreScreen />} />
             <Route path="/customers" element={<ContactsScreen kind="customer" />} />
             <Route path="/vets" element={<ContactsScreen kind="vet" />} />
+            <Route path="/schedules" element={<SchedulesScreen />} />
             <Route path="/move" element={<MoveScreen />} />
             <Route path="*" element={<NotBuiltYet />} />
           </Routes>
@@ -109,6 +116,7 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/more/, "More"],
   [/^\/customers/, "Customers"],
   [/^\/vets/, "Vets"],
+  [/^\/schedules/, "Manage schedules"],
   [/^\/move/, "Move"],
 ];
 

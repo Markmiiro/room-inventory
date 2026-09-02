@@ -40,10 +40,17 @@ def db(migrated_database):
     from app.db import SessionLocal, engine
     from sqlalchemy import text
 
+    # Every synced table, so one test cannot see another's rows. The list has to
+    # be complete: a table left out here leaks across tests, and the symptom is
+    # a test that passes alone and fails in the suite. `CASCADE` handles the
+    # foreign keys between them, and the seeded rows a migration wrote go too —
+    # tests that need rooms or schedules push their own.
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE moves, sales, deaths, records, rooms, "
+                "TRUNCATE moves, sales, deaths, purchases, health_records, "
+                "expenses, expense_categories, customers, vets, "
+                "treatment_schedules, records, rooms, "
                 "sync_anomalies, refresh_tokens, users RESTART IDENTITY CASCADE"
             )
         )
@@ -146,6 +153,47 @@ def op_health(
     data = {"record_id": record_id, "type": type_, "date": "2026-08-31"}
     data.update(fields)
     return {"op": "insert", "entity": "health_record", "id": id_, "data": data, "updated_at": at}
+
+
+def op_schedule(id_: str, at: str, **fields):
+    data = {
+        "name": "Deworming",
+        "species": "cattle",
+        "type": "deworming",
+        "first_due_age_days": 60,
+        "repeat_every_days": 90,
+        "applies_to": "both",
+        "is_active": True,
+    }
+    data.update(fields)
+    return {
+        "op": "upsert",
+        "entity": "treatment_schedule",
+        "id": id_,
+        "data": data,
+        "updated_at": at,
+    }
+
+
+def op_expense(id_: str, at: str, category_id: str, amount: int = 50_000, **fields):
+    data = {
+        "amount": amount,
+        "category_id": category_id,
+        "date": "2026-08-31",
+        "applies_to": "farm",
+    }
+    data.update(fields)
+    return {"op": "insert", "entity": "expense", "id": id_, "data": data, "updated_at": at}
+
+
+def op_category(id_: str, at: str, name: str = "Feed"):
+    return {
+        "op": "upsert",
+        "entity": "expense_category",
+        "id": id_,
+        "data": {"name": name, "is_archived": False},
+        "updated_at": at,
+    }
 
 
 def push(client, device_id: str, operations: list[dict]):

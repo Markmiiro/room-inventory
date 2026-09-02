@@ -13,6 +13,7 @@ import type {
   Record_,
   Room,
   Sale,
+  TreatmentSchedule,
   Vet,
 } from "../db/types";
 import { ApiError, pullChanges, pushOperations } from "./api";
@@ -222,6 +223,7 @@ export class SyncEngine {
             db.expenseCategories,
             db.customers,
             db.vets,
+            db.treatmentSchedules,
             db.meta,
             db.outbox,
           ],
@@ -333,6 +335,13 @@ export async function applyServerRow(
     case "vet": {
       if (queued > 0) return;
       await db.vets.put(data as unknown as Vet);
+      return;
+    }
+    case "treatment_schedule": {
+      // A state entity, so a local edit still waiting to be sent is newer than
+      // whatever the server is offering and must not be written over (SPEC 5.5).
+      if (queued > 0) return;
+      await db.treatmentSchedules.put(data as unknown as TreatmentSchedule);
       return;
     }
     default:

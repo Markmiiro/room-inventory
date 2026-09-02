@@ -95,6 +95,10 @@ export interface HealthRecord extends SyncFields {
   /** Whole shillings, charged directly against this record (SPEC 4.5). */
   cost: number | null;
   notes: string | null;
+  /** SPEC 13.3 — the schedule this dose satisfies, when it was logged from a
+   *  due item. Null for an ad-hoc treatment: a sick animal treated out of turn
+   *  must not shift any schedule's next date. */
+  schedule_id: string | null;
 }
 
 /** SPEC 3.8 — a sale. A group sold in parts carries several. */
@@ -145,6 +149,35 @@ export interface Vet extends SyncFields {
   notes: string | null;
 }
 
+/** SPEC 13.2 — which records a schedule covers. */
+export type ScheduleAppliesTo = "animals" | "groups" | "both";
+
+/** A schedule may cover one species or every one of them (SPEC 13.2). */
+export type ScheduleSpecies = Species | "all";
+
+/**
+ * SPEC 13.2 — a rule, not a date.
+ *
+ * "This species, at this age or on this interval, needs this treatment." A
+ * state entity: it is edited in place and archived rather than deleted, so a
+ * schedule that has stopped applying keeps naming the treatments it produced
+ * (SPEC 4.8).
+ */
+export interface TreatmentSchedule extends SyncFields {
+  name: string;
+  species: ScheduleSpecies;
+  type: HealthType;
+  /** Days after birth or arrival for the first dose. Null means interval-only. */
+  first_due_age_days: number | null;
+  /** Days between doses after the first. Null means the schedule fires once. */
+  repeat_every_days: number | null;
+  applies_to: ScheduleAppliesTo;
+  default_product: string | null;
+  default_withdrawal_days: number | null;
+  is_active: boolean;
+  notes: string | null;
+}
+
 /** SPEC 3.10 — money spent on the farm rather than on one animal. */
 export type ExpenseScope = "farm" | "species" | "room";
 
@@ -170,7 +203,8 @@ export type EntityName =
   | "expense_category"
   | "customer"
   | "vet"
-  | "expense";
+  | "expense"
+  | "treatment_schedule";
 
 /** One queued mutation. SPEC 5.1. */
 export interface OutboxOperation {

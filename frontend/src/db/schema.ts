@@ -13,6 +13,7 @@ import type {
   Room,
   Sale,
   SyncMeta,
+  TreatmentSchedule,
   Vet,
 } from "./types";
 
@@ -36,6 +37,7 @@ export class RoomInventoryDB extends Dexie {
   expenses!: Table<Expense, string>;
   customers!: Table<Customer, string>;
   vets!: Table<Vet, string>;
+  treatmentSchedules!: Table<TreatmentSchedule, string>;
   outbox!: Table<OutboxOperation, number>;
   meta!: Table<SyncMeta, string>;
 
@@ -85,6 +87,20 @@ export class RoomInventoryDB extends Dexie {
       customers: "id, name",
       vets: "id, name",
     });
+
+    // SPEC 13. `schedule_id` joins a treatment back to the rule it satisfied,
+    // and the due computation reads it per record, so it is indexed rather than
+    // scanned (SPEC 6.13). Adding an index to `healthRecords` means restating
+    // its whole index list: Dexie replaces a table's schema, it does not merge.
+    this.version(7).stores({
+      // `is_active` is deliberately not indexed. IndexedDB has no boolean key
+      // type, so a boolean index silently matches nothing — the archived ones
+      // are filtered in memory instead, over a table that holds a handful of
+      // rows rather than thousands.
+      treatmentSchedules: "id, species",
+      healthRecords: "id, record_id, date, next_due, schedule_id",
+    });
+
   }
 }
 
@@ -100,6 +116,8 @@ export const META = {
   lastSyncAt: "last_sync_at",
   /** Whether the ten rooms have been seeded locally. */
   seeded: "rooms_seeded",
+  /** Whether the starter treatment schedules have been seeded locally (SPEC 13.5). */
+  schedulesSeeded: "schedules_seeded",
   /** When an export was last taken. SPEC 10 wants backups confirmed rather
    *  than assumed, and this is the device's half of that. */
   lastBackupAt: "last_backup_at",

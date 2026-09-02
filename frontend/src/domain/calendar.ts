@@ -1,5 +1,15 @@
-import type { Death, HealthRecord, Move, Purchase, Record_, Room, Sale } from "../db/types";
+import type {
+  Death,
+  HealthRecord,
+  Move,
+  Purchase,
+  Record_,
+  Room,
+  Sale,
+  TreatmentSchedule,
+} from "../db/types";
 import { typeLabel } from "./alerts";
+import { scheduleDueItems } from "./schedules";
 
 /**
  * SPEC 4.7 — the calendar.
@@ -46,6 +56,9 @@ export interface CalendarInputs {
   health: HealthRecord[];
   sales: Sale[];
   deaths: Death[];
+  /** SPEC 16 — the calendar gains scheduled treatments. Defaulted so existing
+   *  callers keep working unchanged. */
+  schedules?: TreatmentSchedule[];
   today: string;
 }
 
@@ -135,6 +148,32 @@ export function calendarEvents(inputs: CalendarInputs): CalendarEvent[] {
       detail: `${name(sale.record_id)} · ${sale.count} head`,
       recordId: sale.record_id,
       scheduled: false,
+    });
+  }
+
+  /**
+   * SPEC 13 and 16 — scheduled treatments, arranged by the day they fall due.
+   *
+   * These are always `scheduled: true`: unlike a `next_due` date, a schedule
+   * produces only the *next* dose, and the doses already given are in the
+   * treatment history above under their own dates. A scheduled item in the past
+   * is overdue rather than historical, and the screen colours it from `date`
+   * against `today` exactly as it does the hand-typed ones.
+   */
+  for (const item of scheduleDueItems({
+    records,
+    schedules: inputs.schedules ?? [],
+    health,
+    today,
+  })) {
+    events.push({
+      id: `schedule_due:${item.id}`,
+      kind: "treatment",
+      date: item.dueDate,
+      title: `${item.schedule.default_product ?? item.schedule.name} due`,
+      detail: `${name(item.record.id)} · from ${item.schedule.name}`,
+      recordId: item.record.id,
+      scheduled: true,
     });
   }
 

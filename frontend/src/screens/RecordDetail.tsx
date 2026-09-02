@@ -4,11 +4,28 @@ import { Link, useParams } from "react-router-dom";
 import { MoveIcon, WarningIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import { updateRecord, type RecordEdit } from "../db/mutations";
-import { activeRecords, childRecords, healthForRecord, liveRooms, movesForRecord } from "../db/queries";
+import {
+  activeRecords,
+  allSchedules,
+  childRecords,
+  healthForRecord,
+  liveRooms,
+  movesForRecord,
+} from "../db/queries";
 import { db } from "../db/schema";
-import type { HealthRecord, Move, MoveReason, Record_, Room, Sex } from "../db/types";
-import { formatDate, formatUGX, headUnit } from "../domain/format";
+import type {
+  HealthRecord,
+  Move,
+  MoveReason,
+  Record_,
+  Room,
+  Sex,
+  TreatmentSchedule,
+} from "../db/types";
+import { AGE_UNKNOWN_CHIP, AGE_UNKNOWN_DETAIL, isAgeUnknown } from "../domain/age";
+import { formatDate, formatUGX, headUnit, plural } from "../domain/format";
 import { typeLabel, withdrawalEnd } from "../domain/alerts";
+import { scheduleDueItems, type DueItem } from "../domain/schedules";
 import { findTagClash, speciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
 
@@ -60,6 +77,7 @@ export function RecordDetailScreen() {
   const rooms = useLiveQuery(liveRooms, [], [] as Room[]);
   const children = useLiveQuery(() => childRecords(recordId), [recordId], [] as Record_[]);
   const health = useLiveQuery(() => healthForRecord(recordId), [recordId], [] as HealthRecord[]);
+  const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
   const parent = useLiveQuery(
     () => (record?.parent_record_id ? db.records.get(record.parent_record_id) : undefined),
     [record?.parent_record_id],
@@ -96,6 +114,18 @@ export function RecordDetailScreen() {
           </div>
           <span className={`chip shrink-0 ${STATUS_CHIP[record.status]}`}>{record.status}</span>
         </div>
+
+        {/* SPEC 13.4 — in words, on the record itself. Without this the record
+            simply never appears on a due list, and nothing on screen explains
+            why. */}
+        {record.status === "active" && isAgeUnknown(record) && (
+          <p className="mt-3 rounded-lg bg-alert-bg text-alert-text text-body-md p-3">
+            <span className="font-semibold">{AGE_UNKNOWN_CHIP}</span>
+            <br />
+            {AGE_UNKNOWN_DETAIL} Add {record.kind === "animal" ? "a date of birth" : "an arrival date"}{" "}
+            with Edit below.
+          </p>
+        )}
 
         <div className="mt-4 flex items-baseline gap-2">
           <p className="data-value text-headline-sm font-bold">{record.head_count}</p>
@@ -263,6 +293,10 @@ export function RecordDetailScreen() {
         </Link>
       </div>
 
+      {/* SPEC 13.6 — what this record is due for, before what it has had. What
+          is coming is the actionable half; the history below is the record. */}
+      <UpcomingSection record={record} schedules={schedules} health={health} />
+
       {health.length === 0 ? (
         <p className="card p-6 mt-3 text-body-md text-text-muted text-center">
           Nothing has been given to {record.tag} yet.
@@ -305,6 +339,7 @@ function TreatmentRow({ treatment }: { treatment: HealthRecord }) {
         </p>
         <span className="data-label shrink-0">{formatDate(treatment.date)}</span>
       </div>
+
       <p className="text-body-md text-text-muted mt-1">
         {typeLabel(treatment.type)}
         {treatment.dose ? ` · ${treatment.dose}` : ""}
@@ -465,7 +500,6 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
               id="edit-dob" type="date" className="field font-mono" value={dob}
               max={todayInEAT()} onChange={(e) => setDob(e.target.value)}
             />
-
             <label className="data-label block mt-4 mb-1" htmlFor="edit-offspring">
               {sex === "male" ? "Offspring sired" : "Offspring"}
             </label>
@@ -500,3 +534,82 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
     </div>
   );
 }
+
+
+/**
+ * What this record is due for, from its schedules.
+ *
+ * Reads `scheduleDueItems` rather than working the dates out again, so a date
+ * shown here is the same date Health and Alerts show. A record whose age is
+ * unknown produces nothing, and says so — the chip at the top of the screen
+ * carries the reason, so this only needs to explain the empty list.
+ */
+function UpcomingSection({
+  record,
+  schedules,
+  health,
+}: {
+  record: Record_;
+  schedules: TreatmentSchedule[];
+  health: HealthRecord[];
+}) {
+  const today = todayInEAT();
+  const items: DueItem[] = scheduleDueItems({
+    records: [record],
+    schedules,
+    health,
+    today,
+  });
+
+  if (record.status !== "active") return null;
+
+  if (items.length === 0) {
+    return (
+      <p className="card p-4 mt-3 text-body-md text-text-muted">
+        {isAgeUnknown(record)
+          ? "Nothing is scheduled, because this record has no age to count from."
+          : "No schedule currently applies to this record."}
+      </p>
+    );
+  }
+
+  return (
+    <section className="mt-3">
+      <p className="data-label">Upcoming</p>
+      <ul className="mt-2 flex flex-col gap-2">
+        {items.map((item) => (
+          <li key={item.id} className="card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-body-lg font-semibold truncate">
+                {item.schedule.default_product ?? item.schedule.name}
+              </p>
+              <span
+                className={`chip shrink-0 ${
+                  item.days < 0
+                    ? "bg-alert-bg text-alert-text"
+                    : "bg-background text-text-muted border border-border"
+                }`}
+              >
+                {item.days < 0
+                  ? `${-item.days} ${plural(-item.days, "day")} overdue`
+                  : item.days === 0
+                    ? "Due today"
+                    : `In ${item.days} ${plural(item.days, "day")}`}
+              </span>
+            </div>
+            <p className="text-body-md text-text-muted mt-1">
+              {typeLabel(item.schedule.type)} · {formatDate(item.dueDate)}
+            </p>
+            <p className="data-label mt-1">
+              From {item.schedule.name}
+              {item.lastGiven
+                ? ` · counted from the dose given ${formatDate(item.lastGiven.date)}`
+                : " · first dose, counted from birth or arrival"}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+

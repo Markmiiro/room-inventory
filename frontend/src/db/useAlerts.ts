@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
-import type { HealthRecord, Move, Record_, Room } from "./types";
-import { allHealth, allMoves, liveRooms, outboxAge } from "./queries";
+import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "./types";
+import { allHealth, allMoves, allSchedules, liveRooms, outboxAge } from "./queries";
 import { db } from "./schema";
 import { todayInEAT } from "./ids";
 import { computeAlerts, type Alert } from "../domain/alerts";
@@ -22,6 +22,9 @@ export function useAlerts(): Alert[] {
   const records = useLiveQuery(() => db.records.toArray(), [], [] as Record_[]);
   const moves = useLiveQuery(allMoves, [], [] as Move[]);
   const health = useLiveQuery(allHealth, [], [] as HealthRecord[]);
+  // SPEC 13 — the schedules feed the due rules, so they arrive with the rest of
+  // the inputs rather than being fetched again by whichever screen asks first.
+  const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
   const outbox = useLiveQuery(outboxAge, [], { count: 0, oldestQueuedAt: null });
 
   return useMemo(
@@ -31,10 +34,11 @@ export function useAlerts(): Alert[] {
         records,
         moves,
         health,
+        schedules,
         today: todayInEAT(),
         oldestPendingAt: outbox.oldestQueuedAt,
         pendingCount: outbox.count,
       }),
-    [rooms, records, moves, health, outbox],
+    [rooms, records, moves, health, schedules, outbox],
   );
 }

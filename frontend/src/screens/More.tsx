@@ -68,6 +68,12 @@ export function MoreScreen() {
       <Group title="Configuration">
         <Row to="/" Icon={RoomsIcon} title="Manage rooms" detail="Add or rename the ten rooms" />
         <Row
+          to="/schedules"
+          Icon={AnimalsIcon}
+          title="Manage schedules"
+          detail="Which treatments are due, and when"
+        />
+        <Row
           to="/categories"
           Icon={MoneyIcon}
           title="Expense categories"

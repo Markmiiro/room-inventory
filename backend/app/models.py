@@ -151,6 +151,36 @@ class Vet(StateMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
 
+class TreatmentSchedule(StateMixin, Base):
+    """SPEC 13.2 — a rule, not a date.
+
+    "This species, at this age or on this interval, needs this treatment."
+    A state entity: edited in place, archived rather than deleted (SPEC 4.8), so
+    a schedule that has stopped applying keeps naming the treatments it produced.
+
+    The eight starter rows are seeded by migration 0006 with fixed IDs that must
+    match ``frontend/src/db/seed.ts``, for the same reason the ten rooms do: two
+    devices seeding offline have to arrive at the same schedules, or the first
+    sync produces two of each and every animal is told twice that it is due.
+    """
+
+    __tablename__ = "treatment_schedules"
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # A species name, or the literal "all".
+    species: Mapped[str] = mapped_column(String(16), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Days after birth or arrival for the first dose. Null means interval-only.
+    first_due_age_days: Mapped[int | None] = mapped_column(Integer)
+    # Days between doses. Null means the schedule fires once and stops.
+    repeat_every_days: Mapped[int | None] = mapped_column(Integer)
+    applies_to: Mapped[str] = mapped_column(String(8), nullable=False, default="both")
+    default_product: Mapped[str | None] = mapped_column(Text)
+    default_withdrawal_days: Mapped[int | None] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
 class Expense(SyncMixin, Base):
     """SPEC 3.10 — money spent on the farm rather than on one animal.
 
@@ -214,6 +244,12 @@ class HealthRecord(SyncMixin, Base):
     vet_id: Mapped[str | None] = mapped_column(String(26))
     cost: Mapped[int | None] = mapped_column(BigInteger)  # whole UGX
     notes: Mapped[str | None] = mapped_column(Text)
+    # SPEC 13.3 — the schedule this dose satisfies, when it was logged from a
+    # due item. Null for an ad-hoc treatment, which deliberately does not shift
+    # any schedule's next date.
+    schedule_id: Mapped[str | None] = mapped_column(
+        String(26), ForeignKey("treatment_schedules.id"), index=True
+    )
 
 
 class Purchase(SyncMixin, Base):

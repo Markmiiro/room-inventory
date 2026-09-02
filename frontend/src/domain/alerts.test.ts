@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { HealthRecord, Move, Record_, Room } from "../db/types";
+import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "../db/types";
 import { alertsForRecord, alertsForRoom, byPriority, computeAlerts, withdrawalEnd } from "./alerts";
 import { calendarEvents, monthGrid } from "./calendar";
 
@@ -43,8 +43,13 @@ function record(over: Partial<Record_> = {}): Record_ {
     tag: "C-084",
     breed: null,
     sex: "female",
-    date_of_birth: null,
-    arrival_date: null,
+    // Both dates are set by default so that a test overriding `kind` to
+    // "group" still has a computable age. Without one, every record would raise
+    // the SPEC 13.4 "no date of birth" alert, which belongs in its own test
+    // below rather than as noise in every other one. The app itself only ever
+    // populates one of the two, by kind.
+    date_of_birth: "2025-01-01",
+    arrival_date: "2025-01-01",
     initial_head_count: 1,
     head_count: 1,
     offspring_count: null,
@@ -93,6 +98,7 @@ function health(over: Partial<HealthRecord> = {}): HealthRecord {
     vet_id: null,
     cost: null,
     notes: null,
+    schedule_id: null,
     ...over,
   };
 }
@@ -428,3 +434,148 @@ describe("the calendar", () => {
     expect(grid.length % 7).toBe(0);
   });
 });
+
+
+function schedule(over: Partial<TreatmentSchedule> = {}): TreatmentSchedule {
+  return {
+    id: "sch-1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    device_id: "d",
+    deleted_at: null,
+    name: "Deworming",
+    species: "cattle",
+    type: "deworming",
+    first_due_age_days: 60,
+    repeat_every_days: 90,
+    applies_to: "both",
+    default_product: null,
+    default_withdrawal_days: null,
+    is_active: true,
+    notes: null,
+    ...over,
+  };
+}
+
+/**
+ * SPEC 13 and 16 — the alert conditions the schedules feature adds.
+ *
+ * Written here, alongside the existing rules, because SPEC 16 puts them in the
+ * same place: four screens read `computeAlerts`, and a scheduled treatment must
+ * reach all four the same way a hand-typed one does.
+ */
+describe("scheduled treatments due", () => {
+  it("raises an urgent alert for a schedule that is past due", () => {
+    const alerts = run({
+      // Born 1 Jan 2026, due at 60 days on 2 March — well before today.
+      records: [record({ date_of_birth: "2026-01-01" })],
+      schedules: [schedule({ first_due_age_days: 60, repeat_every_days: null })],
+    });
+
+    const due = alerts.filter((a) => a.kind === "scheduled_treatment_due");
+    expect(due).toHaveLength(1);
+    expect(due[0]).toMatchObject({ priority: "urgent", recordId: "rec-1", scheduleId: "sch-1" });
+    expect(due[0]!.detail).toContain("Deworming");
+  });
+
+  it("puts one falling inside a week under This week", () => {
+    const alerts = run({
+      // TODAY is 2026-09-01; 30 days after 2026-08-05 is 2026-09-04.
+      records: [record({ date_of_birth: "2026-08-05" })],
+      schedules: [schedule({ first_due_age_days: 30, repeat_every_days: null })],
+    });
+
+    const due = alerts.filter((a) => a.kind === "scheduled_treatment_due");
+    expect(due[0]).toMatchObject({ priority: "this_week" });
+    expect(due[0]!.date).toBe("2026-09-04");
+  });
+
+  it("says nothing about one further out than a month", () => {
+    const alerts = run({
+      records: [record({ date_of_birth: "2026-08-05" })],
+      schedules: [schedule({ first_due_age_days: 200, repeat_every_days: null })],
+    });
+    expect(alerts.filter((a) => a.kind === "scheduled_treatment_due")).toEqual([]);
+  });
+
+  /** SPEC 13.4 — the whole point: no age, no schedule, and no invented date. */
+  it("raises nothing for a record whose age is unknown", () => {
+    const alerts = run({
+      records: [record({ date_of_birth: null, arrival_date: null })],
+      schedules: [schedule()],
+    });
+    expect(alerts.filter((a) => a.kind === "scheduled_treatment_due")).toEqual([]);
+  });
+
+  it("carries the schedule id, so a screen can chip where the date came from", () => {
+    const alerts = run({
+      records: [record({ date_of_birth: "2026-01-01" })],
+      schedules: [schedule({ id: "sch-fmd", name: "Foot and mouth vaccination" })],
+    });
+    const due = alerts.find((a) => a.kind === "scheduled_treatment_due");
+    expect(due!.scheduleId).toBe("sch-fmd");
+  });
+});
+
+describe("records with no date of birth — SPEC 13.4", () => {
+  it("raises one alert counting them, not one alert each", () => {
+    const alerts = run({
+      records: [
+        record({ id: "a", tag: "A", date_of_birth: null }),
+        record({ id: "b", tag: "B", date_of_birth: null }),
+        record({ id: "c", tag: "C", date_of_birth: "2026-01-01" }),
+      ],
+    });
+
+    const missing = alerts.filter((a) => a.kind === "no_date_of_birth");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toMatchObject({ priority: "this_week", count: 2 });
+    expect(missing[0]!.title).toContain("2 animals");
+    expect(missing[0]!.title).toContain("cannot run");
+  });
+
+  it("names an arrival date rather than a date of birth for a group", () => {
+    const alerts = run({
+      records: [record({ kind: "group", date_of_birth: null, arrival_date: null })],
+    });
+    const missing = alerts.find((a) => a.kind === "no_date_of_birth");
+    expect(missing!.title).toContain("arrival date");
+    expect(missing!.title).not.toContain("date of birth");
+  });
+
+  it("names both when both are missing", () => {
+    const alerts = run({
+      records: [
+        record({ id: "a", tag: "A", date_of_birth: null }),
+        record({ id: "b", tag: "B", kind: "group", date_of_birth: null, arrival_date: null }),
+      ],
+    });
+    const missing = alerts.find((a) => a.kind === "no_date_of_birth");
+    expect(missing!.title).toContain("date of birth");
+    expect(missing!.title).toContain("arrival date");
+  });
+
+  it("says nothing about a sold or dead record", () => {
+    const alerts = run({
+      records: [
+        record({ id: "a", tag: "A", date_of_birth: null, status: "sold" }),
+        record({ id: "b", tag: "B", date_of_birth: null, status: "dead" }),
+      ],
+    });
+    expect(alerts.filter((a) => a.kind === "no_date_of_birth")).toEqual([]);
+  });
+
+  it("keeps a stable id so the alert does not flicker as records are filled in", () => {
+    const one = run({ records: [record({ date_of_birth: null })] });
+    const two = run({
+      records: [
+        record({ id: "a", tag: "A", date_of_birth: null }),
+        record({ id: "b", tag: "B", date_of_birth: null }),
+      ],
+    });
+    expect(one.find((a) => a.kind === "no_date_of_birth")!.id).toBe(
+      two.find((a) => a.kind === "no_date_of_birth")!.id,
+    );
+  });
+});
+

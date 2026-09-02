@@ -9,6 +9,7 @@ import type {
   Record_,
   Room,
   Sale,
+  TreatmentSchedule,
 } from "./types";
 
 /** Reads the screens run. Everything comes from IndexedDB, so every screen
@@ -144,3 +145,18 @@ export async function salesForRecord(recordId: string): Promise<Sale[]> {
   const sales = await db.sales.where("record_id").equals(recordId).toArray();
   return sales.filter((s) => !s.deleted_at).sort((a, b) => b.date.localeCompare(a.date));
 }
+
+/** SPEC 13 — every schedule, archived ones included.
+ *
+ *  The archived ones come back because the due computation still needs to name
+ *  the schedule a past treatment was given against, and because the manage
+ *  screen shows them so they can be brought back. Filtering to the active ones
+ *  is the caller's job, and `scheduleDueItems` does it.
+ */
+export async function allSchedules(): Promise<TreatmentSchedule[]> {
+  const schedules = await db.treatmentSchedules.toArray();
+  return schedules
+    .filter((s) => !s.deleted_at)
+    .sort((a, b) => (a.species === b.species ? a.name.localeCompare(b.name) : a.species.localeCompare(b.species)));
+}
+

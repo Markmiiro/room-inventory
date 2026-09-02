@@ -1,6 +1,8 @@
-import type { HealthRecord, Move, Record_, Room } from "../db/types";
+import type { HealthRecord, Move, Record_, Room, TreatmentSchedule } from "../db/types";
+import { AGE_UNKNOWN_DETAIL, recordsWithUnknownAge } from "./age";
 import { addDays, daysBetween } from "./format";
 import { currentRoomId, isOverCapacity, occupancy } from "./rules";
+import { scheduleDueItems, type DueItem } from "./schedules";
 
 /**
  * SPEC 4.6 — alerts.
@@ -27,7 +29,10 @@ export type AlertKind =
   | "treatment_due_soon"
   | "long_isolation"
   | "duplicate_tag"
-  | "treatment_due_later";
+  | "treatment_due_later"
+  // SPEC 16 — the three conditions sections 13 and 15 add.
+  | "scheduled_treatment_due"
+  | "no_date_of_birth";
 
 export interface Alert {
   /** Stable across recomputations, so React keys and "seen" state hold still. */
@@ -41,6 +46,12 @@ export interface Alert {
   recordId?: string;
   /** The date the alert hangs off, when it has one — Calendar orders by this. */
   date?: string;
+  /** SPEC 13.6 — the schedule a due item came from, so the screens can chip it
+   *  with where the date came from rather than implying it was typed. */
+  scheduleId?: string;
+  /** How many records an aggregate alert covers, for the ones that count
+   *  rather than name (SPEC 13.4). */
+  count?: number;
 }
 
 export interface AlertInputs {
@@ -48,6 +59,9 @@ export interface AlertInputs {
   records: Record_[];
   moves: Move[];
   health: HealthRecord[];
+  /** SPEC 13 — the rules that turn a schedule into a date. Defaulted so the
+   *  existing callers and tests keep working unchanged. */
+  schedules?: TreatmentSchedule[];
   /** Today in East Africa Time, as YYYY-MM-DD. */
   today: string;
   /** When the oldest unsent outbox entry was queued, as an ISO timestamp.
@@ -85,9 +99,20 @@ export function computeAlerts(inputs: AlertInputs): Alert[] {
   const byId = new Map(active.map((record) => [record.id, record]));
   const roomById = new Map(rooms.filter((r) => !r.deleted_at).map((room) => [room.id, room]));
 
+  // SPEC 13.3 — computed once and passed down, because two rules read it and a
+  // second pass would be a second chance to disagree.
+  const dueItems = scheduleDueItems({
+    records: active,
+    schedules: inputs.schedules ?? [],
+    health: liveHealth,
+    today,
+  });
+
   const alerts: Alert[] = [
     ...roomsOverCapacity(roomById, active),
     ...treatmentAlerts(liveHealth, byId, today),
+    ...scheduledTreatments(dueItems),
+    ...missingDateOfBirth(active),
     ...syncFailing(inputs),
     ...longIsolationStays(roomById, active, moves, today),
     ...duplicateTags(active),
@@ -190,6 +215,112 @@ function treatmentAlerts(
   }
 
   return alerts;
+}
+
+/**
+ * SPEC 13 and 16 — a treatment a schedule says is due.
+ *
+ * These sit alongside the `next_due` rules rather than replacing them: a farm
+ * partway through adopting schedules has both, and SPEC 13.6 says the two
+ * appear together with the scheduled ones chipped to say where the date came
+ * from. They use the same three windows as the hand-typed ones, so "overdue" is
+ * one idea on this screen and not two.
+ *
+ * Only one alert per (record, schedule) pair is possible, because
+ * `scheduleDueItems` returns one item per pair. The windows are checked in
+ * order so an item cannot land in two of them.
+ */
+function scheduledTreatments(items: DueItem[]): Alert[] {
+  const alerts: Alert[] = [];
+
+  for (const item of items) {
+    const { record, schedule, dueDate, days } = item;
+    // Anything further out than a month is not yet worth a line on a screen
+    // whose whole purpose is what needs doing.
+    if (days > DUE_LATER_DAYS) continue;
+
+    const what = schedule.default_product ?? schedule.name;
+    const base = {
+      kind: "scheduled_treatment_due" as const,
+      recordId: record.id,
+      scheduleId: schedule.id,
+      date: dueDate,
+    };
+
+    if (days < 0) {
+      alerts.push({
+        ...base,
+        id: `scheduled_treatment_due:${item.id}`,
+        priority: "urgent",
+        title: `${record.tag} — ${what} overdue`,
+        detail: `${schedule.name} was due ${-days} ${plural(-days, "day")} ago, on ${dueDate}.`,
+      });
+    } else if (days <= DUE_SOON_DAYS) {
+      alerts.push({
+        ...base,
+        id: `scheduled_treatment_due:${item.id}`,
+        priority: "this_week",
+        title: `${record.tag} — ${what} due`,
+        detail:
+          days === 0
+            ? `${schedule.name} is due today.`
+            : `${schedule.name} is due in ${days} ${plural(days, "day")}.`,
+      });
+    } else {
+      alerts.push({
+        ...base,
+        id: `scheduled_treatment_due:${item.id}`,
+        priority: "later",
+        title: `${record.tag} — ${what} due`,
+        detail: `${schedule.name} is due in ${days} days, on ${dueDate}.`,
+      });
+    }
+  }
+
+  return alerts;
+}
+
+/**
+ * SPEC 13.4 — the silent failure, said out loud.
+ *
+ * A record with no date of birth fires no schedule and shows no sale readiness.
+ * Nothing about that is visible from the absence itself, which is exactly why
+ * it needs an alert: the app going quiet looks identical to the app having
+ * nothing to say.
+ *
+ * One alert for all of them rather than one each. SPEC 13.4 words it as a
+ * count — "N animals have no date of birth" — and a farm that has never filled
+ * the field in would otherwise get an alert list that is nothing but this,
+ * burying every alert that names something to actually do today.
+ */
+function missingDateOfBirth(active: Record_[]): Alert[] {
+  const missing = recordsWithUnknownAge(active);
+  if (missing.length === 0) return [];
+
+  const animals = missing.filter((r) => r.kind === "animal").length;
+  const groups = missing.length - animals;
+
+  // Named separately when both are present: they are missing two different
+  // fields, on two different forms (SPEC 13.4).
+  const what =
+    groups === 0
+      ? `${animals} ${plural(animals, "animal")} ${animals === 1 ? "has" : "have"} no date of birth`
+      : animals === 0
+        ? `${groups} ${plural(groups, "group")} ${groups === 1 ? "has" : "have"} no arrival date`
+        : `${animals} ${plural(animals, "animal")} have no date of birth and ${groups} ${plural(groups, "group")} have no arrival date`;
+
+  return [
+    {
+      // Stable regardless of which records are missing it, so the alert does
+      // not flicker into a new identity every time one is filled in.
+      id: "no_date_of_birth",
+      kind: "no_date_of_birth",
+      priority: "this_week",
+      title: `${what}, so ${missing.length === 1 ? "its" : "their"} treatment schedule cannot run.`,
+      detail: AGE_UNKNOWN_DETAIL,
+      count: missing.length,
+    },
+  ];
 }
 
 /** SPEC 4.6 — unsynced changes older than 48 hours. Not "offline": being

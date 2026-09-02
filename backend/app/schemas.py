@@ -7,13 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # The entity names a client may push. Split by class, because the two are
 # merged by completely different rules (SPEC 3.2, 5.4).
-STATE_ENTITIES = {"room", "record"}
+STATE_ENTITIES = {"room", "record", "treatment_schedule"}
 EVENT_ENTITIES = {"move", "sale", "death", "purchase", "health_record", "expense"}
 SYNCED_ENTITIES = STATE_ENTITIES | EVENT_ENTITIES
 
 EntityName = Literal[
     "room", "record", "move", "sale", "death", "purchase", "health_record",
-    "expense_category", "customer", "vet", "expense",
+    "expense_category", "customer", "vet", "expense", "treatment_schedule",
 ]
 
 

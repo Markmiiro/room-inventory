@@ -6,13 +6,23 @@ import { todayInEAT } from "../db/ids";
 import {
   allDeaths,
   allHealth,
+  allSchedules,
   allMoves,
   allPurchases,
   allSales,
   liveRooms,
 } from "../db/queries";
 import { db } from "../db/schema";
-import type { Death, HealthRecord, Move, Purchase, Record_, Room, Sale } from "../db/types";
+import type {
+  Death,
+  HealthRecord,
+  Move,
+  Purchase,
+  Record_,
+  Room,
+  Sale,
+  TreatmentSchedule,
+} from "../db/types";
 import {
   calendarEvents,
   eventsByDate,
@@ -52,10 +62,12 @@ export function CalendarScreen() {
   const health = useLiveQuery(allHealth, [], [] as HealthRecord[]);
   const sales = useLiveQuery(allSales, [], [] as Sale[]);
   const deaths = useLiveQuery(allDeaths, [], [] as Death[]);
+  const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
 
   const events = useMemo(
-    () => calendarEvents({ records, rooms, moves, purchases, health, sales, deaths, today }),
-    [records, rooms, moves, purchases, health, sales, deaths, today],
+    () =>
+      calendarEvents({ records, rooms, moves, purchases, health, sales, deaths, schedules, today }),
+    [records, rooms, moves, purchases, health, sales, deaths, schedules, today],
   );
   const byDate = useMemo(() => eventsByDate(events), [events]);
 

@@ -35,6 +35,7 @@ from app.models import (
     Record,
     Room,
     Sale,
+    TreatmentSchedule,
     Vet,
 )
 from app.schemas import EVENT_ENTITIES, Operation, OperationResult, PullChange
@@ -53,6 +54,7 @@ ENTITY_MODELS: dict[str, type] = {
     "customer": Customer,
     "vet": Vet,
     "expense": Expense,
+    "treatment_schedule": TreatmentSchedule,
 }
 
 # Columns a client may write, per entity. Anything else in `data` is ignored
@@ -73,12 +75,17 @@ WRITABLE: dict[str, set[str]] = {
     "purchase": {"record_id", "date", "price", "seller", "count"},
     "health_record": {
         "record_id", "type", "product", "dose", "date", "next_due",
-        "withdrawal_days", "vet_id", "cost", "notes",
+        "withdrawal_days", "vet_id", "cost", "notes", "schedule_id",
     },
     "expense_category": {"name", "is_archived", "deleted_at"},
     "customer": {"name", "phone", "location", "notes", "deleted_at"},
     "vet": {"name", "phone", "notes", "deleted_at"},
     "expense": {"amount", "category_id", "date", "applies_to", "applies_to_id", "note"},
+    "treatment_schedule": {
+        "name", "species", "type", "first_due_age_days", "repeat_every_days",
+        "applies_to", "default_product", "default_withdrawal_days", "is_active",
+        "notes", "deleted_at",
+    },
 }
 
 DATE_FIELDS = {"date", "date_of_birth", "arrival_date", "offspring_updated_at", "next_due"}
@@ -186,7 +193,7 @@ def _apply_event(
     model = ENTITY_MODELS[op.entity]
     existing = db.get(model, op.id)
     if existing is not None:
-        touched.add(existing.record_id)
+        _touch_event(existing_record_id=getattr(existing, "record_id", None), touched=touched)
         return OperationResult(id=op.id, entity=op.entity, status="duplicate")
 
     fields = {k: _coerce(k, v) for k, v in op.data.items() if k in WRITABLE[op.entity]}
@@ -210,8 +217,19 @@ def _apply_event(
         **fields,
     )
     db.add(row)
-    touched.add(fields["record_id"])
+    # Not every event names a record. An expense is allocated across the farm
+    # rather than owned by one animal (SPEC 3.10), so it has no `record_id` at
+    # all — reading one unconditionally turns pushing an expense into a KeyError
+    # that the surrounding `except IntegrityError` does not catch, wedging the
+    # whole batch.
+    _touch_event(existing_record_id=fields.get("record_id"), touched=touched)
     return OperationResult(id=op.id, entity=op.entity, status="applied")
+
+
+def _touch_event(existing_record_id: str | None, touched: set[str]) -> None:
+    """Mark the record an event names, when it names one."""
+    if existing_record_id is not None:
+        touched.add(existing_record_id)
 
 
 def _missing_required(entity: str, fields: dict[str, Any]) -> list[str]:

@@ -21,6 +21,7 @@ import type {
   Sex,
   Source,
   Species,
+  TreatmentSchedule,
 } from "./types";
 
 /**
@@ -43,7 +44,8 @@ type Entity =
   | Sale
   | Death
   | Expense
-  | ExpenseCategory;
+  | ExpenseCategory
+  | TreatmentSchedule;
 
 async function enqueue(
   tx: { outbox: typeof db.outbox },
@@ -515,6 +517,9 @@ export interface HealthInput {
   vet_id?: string | null;
   cost?: number | null;
   notes?: string | null;
+  /** SPEC 13.3 — the schedule this dose satisfies. Set when the treatment was
+   *  logged from a due item; left null for an ad-hoc one. */
+  schedule_id?: string | null;
 }
 
 /**
@@ -544,6 +549,9 @@ export async function recordHealth(input: HealthInput): Promise<HealthRecord> {
     vet_id: input.vet_id ?? null,
     cost: input.cost ?? null,
     notes: input.notes?.trim() || null,
+    // SPEC 13.3 — an ad-hoc treatment carries null here and so does not move
+    // any schedule's next date. Only a dose logged against a due item does.
+    schedule_id: input.schedule_id ?? null,
   };
 
   await db.transaction("rw", db.healthRecords, db.outbox, async () => {
@@ -559,6 +567,7 @@ export async function recordHealth(input: HealthInput): Promise<HealthRecord> {
       vet_id: treatment.vet_id,
       cost: treatment.cost,
       notes: treatment.notes,
+      schedule_id: treatment.schedule_id,
     });
   });
 
@@ -801,3 +810,110 @@ export async function recordExpense(input: ExpenseInput): Promise<Expense> {
 
   return expense;
 }
+
+
+// ---------------------------------------------------------------------------
+// Treatment schedules — SPEC 13
+// ---------------------------------------------------------------------------
+
+export interface ScheduleInput {
+  name: string;
+  species: TreatmentSchedule["species"];
+  type: HealthType;
+  first_due_age_days?: number | null;
+  repeat_every_days?: number | null;
+  applies_to?: TreatmentSchedule["applies_to"];
+  default_product?: string | null;
+  default_withdrawal_days?: number | null;
+  notes?: string | null;
+}
+
+export async function createSchedule(input: ScheduleInput): Promise<TreatmentSchedule> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  const schedule: TreatmentSchedule = {
+    id: newId(),
+    created_at: at,
+    updated_at: at,
+    device_id,
+    deleted_at: null,
+    name: input.name.trim(),
+    species: input.species,
+    type: input.type,
+    first_due_age_days: input.first_due_age_days ?? null,
+    repeat_every_days: input.repeat_every_days ?? null,
+    applies_to: input.applies_to ?? "both",
+    default_product: input.default_product?.trim() || null,
+    default_withdrawal_days: input.default_withdrawal_days ?? null,
+    is_active: true,
+    notes: input.notes?.trim() || null,
+  };
+
+  await db.transaction("rw", db.treatmentSchedules, db.outbox, async () => {
+    await db.treatmentSchedules.add(schedule);
+    await enqueue(db, "upsert", "treatment_schedule", schedule, scheduleFields(schedule));
+  });
+
+  return schedule;
+}
+
+/**
+ * Edit a schedule.
+ *
+ * A state entity, so the same per-field discipline as rooms and categories: only
+ * what genuinely changed is pushed, or this device's untouched copy of every
+ * other field would compete with another device's real edit to it (SPEC 5.4).
+ *
+ * `is_active` is in here rather than in a delete: SPEC 13.5 says schedules are
+ * archived, never deleted, so the treatments already given against one keep
+ * naming it.
+ */
+export type ScheduleEdit = Partial<
+  Pick<
+    TreatmentSchedule,
+    | "name"
+    | "species"
+    | "type"
+    | "first_due_age_days"
+    | "repeat_every_days"
+    | "applies_to"
+    | "default_product"
+    | "default_withdrawal_days"
+    | "is_active"
+    | "notes"
+  >
+>;
+
+export async function updateSchedule(id: string, changes: ScheduleEdit): Promise<void> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  await db.transaction("rw", db.treatmentSchedules, db.outbox, async () => {
+    const existing = await db.treatmentSchedules.get(id);
+    if (!existing) throw new Error(`No schedule ${id}`);
+
+    const real = changedOnly(existing, changes);
+    if (Object.keys(real).length === 0) return;
+
+    const updated: TreatmentSchedule = { ...existing, ...real, updated_at: at, device_id };
+    await db.treatmentSchedules.put(updated);
+    await enqueue(db, "upsert", "treatment_schedule", updated, real as Record<string, unknown>);
+  });
+}
+
+function scheduleFields(schedule: TreatmentSchedule): Record<string, unknown> {
+  return {
+    name: schedule.name,
+    species: schedule.species,
+    type: schedule.type,
+    first_due_age_days: schedule.first_due_age_days,
+    repeat_every_days: schedule.repeat_every_days,
+    applies_to: schedule.applies_to,
+    default_product: schedule.default_product,
+    default_withdrawal_days: schedule.default_withdrawal_days,
+    is_active: schedule.is_active,
+    notes: schedule.notes,
+  };
+}
+

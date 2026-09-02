@@ -231,6 +231,38 @@ selling, so it could not be tested without them. `Purchase` is fully wired —
 SPEC 3.7 says one is created automatically whenever a record is added with
 `source = bought`, so Add or purchase could not be honest without it.
 
+### Deliberately not built, and named so it stays visible
+
+SPEC 17 lists four gaps that are decisions rather than oversights. They are
+repeated here because a gap nobody can see is a gap nobody fixes, and the first
+of them is load-bearing for two features that *are* built.
+
+- **Birth records.** Offspring is a typed number. There is no birth event, no
+  link from offspring to mother, and an animal born on the farm has no arrival
+  date of its own. This is the main reason a date of birth goes missing, and a
+  record with no date of birth fires no treatment schedule (SPEC 13.4) and shows
+  no sale readiness (SPEC 15.3). The app says so rather than going quiet — a
+  chip on the record, a filter on the Animals list, and an alert under This
+  week — but saying so is not the same as fixing it.
+- **Customers and vets are not linked.** A sale stores the buyer as free text,
+  so customer history does not work. SPEC 14 links vets to visits; sales still
+  need the same treatment.
+- **Partial payment.** A sale is one price on one date. A buyer paying half now
+  and half next month has nowhere to go, and the profit figures will be wrong
+  until it does.
+- **Feed quantity.** Feed is tracked as cost, not as bags in and out. You know
+  what you spent, not what you used.
+
+One more, found while building SPEC 13 and not in the spec's own list:
+
+- **An animal's arrival date is discarded.** The Add or purchase form asks for
+  one and the user types it, but `createRecord` keeps `arrival_date` only for
+  groups (`db/mutations.ts`), so for an animal it is stored as null and survives
+  only as the date of its first move. Date of birth is therefore an animal's
+  *only* possible age basis, and it is optional and blank by default — which
+  means even a bought animal that demonstrably arrived on a known day ends up
+  "age unknown".
+
 ### Restoring a backup
 
 `More → Restore from a backup` replaces everything on the device. That is what
