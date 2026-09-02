@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { db } from "../db/schema";
 import { login } from "../sync/api";
-import { STALE_SYNC_MS, syncEngine } from "../sync/engine";
+import { STALE_SYNC_MS, syncEngine, type SyncStatus } from "../sync/engine";
 import { useLiveQuery, useSyncStatus } from "../sync/useSync";
 import { CheckIcon, CloudOffIcon, SyncIcon, WarningIcon } from "./Icons";
 
@@ -33,7 +33,7 @@ export function SyncIndicator() {
   const queue = usePendingQueue();
   const [open, setOpen] = useState(false);
 
-  const { label, Icon, tone } = describe(status, queue);
+  const { label, Icon, tone } = describeSyncStatus(status, queue);
 
   return (
     <div className="relative">
@@ -53,8 +53,16 @@ export function SyncIndicator() {
   );
 }
 
-function describe(
-  status: ReturnType<typeof useSyncStatus>,
+/**
+ * The words on the indicator.
+ *
+ * Exported and pure so the rule can be tested directly. This is where a device
+ * pointed at the wrong server used to be told it was Synced, and a rule that
+ * only exists inside a rendered component is a rule that gets tested through
+ * three layers of scaffolding or, in practice, not at all.
+ */
+export function describeSyncStatus(
+  status: Pick<SyncStatus, "state" | "error">,
   queue: { pending: number; stale: boolean },
 ) {
   if (queue.stale) {
@@ -68,6 +76,21 @@ function describe(
   }
   if (queue.pending > 0) {
     return { label: `${queue.pending} pending`, Icon: SyncIcon, tone: "bg-white/15 text-white" };
+  }
+  /**
+   * An empty outbox is not the same thing as a working sync.
+   *
+   * This used to fall straight through to "Synced" whenever nothing was
+   * queued, without ever consulting whether the last attempt actually
+   * succeeded. A device pointed at the wrong server has nothing to send, fails
+   * every pull, and reported Synced the whole time — the one state the
+   * indicator exists to rule out. "Offline" is deliberately not reused here: it
+   * means there is no network, which is normal and expected in a building with
+   * no coverage, whereas this is a request that reached *something* and got an
+   * answer the app could not use.
+   */
+  if (status.error) {
+    return { label: "Not syncing", Icon: WarningIcon, tone: "bg-white/15 text-white" };
   }
   return { label: "Synced", Icon: CheckIcon, tone: "bg-white/15 text-white" };
 }
@@ -101,9 +124,19 @@ function SyncPanel({ onClose }: { onClose: () => void }) {
           <p className="text-body-md font-semibold text-primary">Sync</p>
           <p className="text-body-md text-text-muted">
             {pending === 0
-              ? "Everything on this device has reached the server."
+              ? status.error
+                ? "Nothing is waiting to be sent, but the last sync did not succeed."
+                : "Everything on this device has reached the server."
               : `${pending} ${pending === 1 ? "change is" : "changes are"} waiting to be sent.`}
           </p>
+          {/* The reason, in words. It names a cause the person reading it can
+              act on — a wrong API address is a deploy setting, not something
+              the device can retry its way out of. Local data is untouched
+              either way (SPEC 5.5), which is why this informs rather than
+              alarms. */}
+          {status.error && (
+            <p className="text-body-md text-alert-text mt-2">{status.error}</p>
+          )}
           {status.lastSyncAt && (
             <p className="data-label mt-2">Last synced {new Date(status.lastSyncAt).toLocaleTimeString()}</p>
           )}

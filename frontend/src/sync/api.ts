@@ -52,8 +52,57 @@ export class ApiError extends Error {
    *  limiting will fail identically forever, and must not hold up the outbox. */
   get retryable(): boolean {
     if (this.status === 401 || this.status === 429) return true;
+    // A response that was not JSON did not come from this API at all, so its
+    // status says nothing about whether retrying could work. It is almost
+    // always a misconfigured base URL, which is fixed by a redeploy rather than
+    // by anything the device can do — so it must not be treated as a permanent
+    // failure that lets queued work be discarded.
+    if (this.code === NOT_JSON) return true;
     return this.status >= 500 || this.status === 0;
   }
+}
+
+/** `code` for a response whose body was not JSON. See `expectJson`. */
+export const NOT_JSON = "not_json";
+
+/**
+ * Whether a response actually carries a JSON body.
+ *
+ * This exists because of a specific, silent failure. If `VITE_API_BASE` is
+ * wrong — most easily by omitting the scheme, which makes it a relative URL
+ * that resolves against the app's own origin — every request lands on the
+ * static frontend server instead of the API. That server answers a GET with
+ * `200 OK` and the contents of `index.html`, because serving the app shell for
+ * unknown paths is exactly what a single-page app needs it to do.
+ *
+ * So the sync engine saw a 200 and a body, and the only thing that went wrong
+ * was a JSON parse error thrown from somewhere it was not expected. Nothing
+ * about the failure said "you are talking to the wrong server", and with an
+ * empty outbox the indicator went on reporting Synced.
+ *
+ * Checking the content type turns that into a plain, named failure. Anything
+ * that is not JSON is not an answer from this API, whatever its status code.
+ */
+function isJson(response: Response): boolean {
+  const type = (response.headers.get("content-type") ?? "").toLowerCase();
+  // Strip any `; charset=utf-8`, then accept `application/json` and the
+  // structured-suffix forms the API also uses, such as
+  // `application/problem+json` for RFC 7807 errors (SPEC 7).
+  const mime = type.split(";")[0]!.trim();
+  return mime === "application/json" || mime.endsWith("+json");
+}
+
+/** The wrong-server message, which names the cause rather than the symptom. */
+function notJson(response: Response): ApiError {
+  const type = response.headers.get("content-type") ?? "none";
+  return new ApiError(
+    response.status,
+    NOT_JSON,
+    `The server replied with ${type} rather than JSON. ` +
+      "This is not a response from the API — the request is most likely not " +
+      "reaching it. Check that VITE_API_BASE names the backend, with its " +
+      "scheme and no path.",
+  );
 }
 
 let accessToken: string | null = null;
@@ -100,6 +149,9 @@ async function request<T>(path: string, init: RequestInit = {}, retryOn401 = tru
   }
 
   if (!response.ok) {
+    // An error page from the wrong server is not an API error, and reporting it
+    // as one would hide the actual problem behind a generic "Request failed".
+    if (!isJson(response)) throw notJson(response);
     const problem = await response.json().catch(() => ({}));
     throw new ApiError(
       response.status,
@@ -108,8 +160,21 @@ async function request<T>(path: string, init: RequestInit = {}, retryOn401 = tru
     );
   }
 
+  // A 204 carries no body at all, so there is nothing to validate.
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+
+  // Everything else must be JSON. A 200 that is not is the wrong server
+  // answering, and must never be mistaken for a successful sync.
+  if (!isJson(response)) throw notJson(response);
+
+  try {
+    return (await response.json()) as T;
+  } catch {
+    // The header claimed JSON and the body was not. Rarer, but the same lie,
+    // so it gets the same answer rather than an unhandled SyntaxError escaping
+    // into the engine.
+    throw notJson(response);
+  }
 }
 
 async function tryRefresh(): Promise<boolean> {

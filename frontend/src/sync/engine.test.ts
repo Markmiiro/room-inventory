@@ -4,7 +4,7 @@ import { resetDeviceIdCache } from "../db/ids";
 import { createRecord, recordMove } from "../db/mutations";
 import { META, db, getMeta } from "../db/schema";
 import { seedRoomId, seedRoomsIfEmpty } from "../db/seed";
-import { ApiError, type PullResponse, type PushResponse } from "./api";
+import { ApiError, NOT_JSON, type PullResponse, type PushResponse } from "./api";
 
 // vi.mock factories are hoisted above the module body, so the spies have to be
 // created in a hoisted block or they do not exist yet when the factory runs.
@@ -37,6 +37,21 @@ function acceptAll(): void {
 function offline(): void {
   const fail = async () => {
     throw new ApiError(0, "offline", "network down");
+  };
+  pushOperations.mockImplementation(fail);
+  pullChanges.mockImplementation(fail);
+}
+
+/**
+ * A server that answers, but not with JSON.
+ *
+ * This is the static frontend host serving `index.html` for an API path, which
+ * is what a wrong `VITE_API_BASE` produces. It is deliberately a 200: the whole
+ * difficulty of this failure was that it looked like success.
+ */
+function wrongServer(): void {
+  const fail = async () => {
+    throw new ApiError(200, NOT_JSON, "The server replied with text/html rather than JSON.");
   };
   pushOperations.mockImplementation(fail);
   pullChanges.mockImplementation(fail);
@@ -326,5 +341,70 @@ describe("sync status", () => {
     await syncOnce(engine);
 
     expect(engine.getStatus().stale).toBe(false);
+  });
+});
+
+
+describe("a server that answers with something other than JSON", () => {
+  it("does not report a synced status", async () => {
+    wrongServer();
+    await syncOnce(engine);
+
+    const status = engine.getStatus();
+    expect(status.state).not.toBe("synced");
+    expect(status.error).not.toBeNull();
+  });
+
+  /**
+   * The failure has to be distinguishable from having no signal. Offline is
+   * normal here and means the work goes out later by itself; this does not.
+   */
+  it("does not report it as offline", async () => {
+    wrongServer();
+    await syncOnce(engine);
+
+    expect(engine.getStatus().state).not.toBe("offline");
+    expect(engine.getStatus().error).toContain("JSON");
+  });
+
+  it("does not move the last-synced time", async () => {
+    wrongServer();
+    await syncOnce(engine);
+
+    expect(await getMeta(META.lastSyncAt, null)).toBeNull();
+  });
+
+  it("keeps queued work rather than discarding it", async () => {
+    await seedRoomsIfEmpty();
+    await createRecord({
+      kind: "animal",
+      species: "cattle",
+      tag: "C-084",
+      source: "bought",
+      room_id: seedRoomId(1),
+    });
+    const queued = await db.outbox.count();
+    expect(queued).toBeGreaterThan(0);
+
+    wrongServer();
+    await syncOnce(engine);
+
+    // Nothing reached the server, so nothing may leave the outbox.
+    expect(await db.outbox.count()).toBe(queued);
+  });
+
+  it("recovers once the address is right", async () => {
+    wrongServer();
+    await syncOnce(engine);
+    expect(engine.getStatus().error).not.toBeNull();
+
+    acceptAll();
+    noChanges();
+    await syncOnce(engine);
+
+    const status = engine.getStatus();
+    expect(status.state).toBe("synced");
+    expect(status.error).toBeNull();
+    expect(await getMeta(META.lastSyncAt, null)).not.toBeNull();
   });
 });
