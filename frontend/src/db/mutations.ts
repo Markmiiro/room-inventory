@@ -1348,3 +1348,58 @@ export async function updateProduceType(
     await enqueue(db, "upsert", "produce_type", updated, real as Record<string, unknown>);
   });
 }
+
+
+export interface StockCountInput {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  counted_sacks?: number | null;
+  counted_kg: number;
+  notes?: string | null;
+}
+
+/**
+ * SPEC 20.7 — a physical count.
+ *
+ * An event, appended like any other. It carries no adjustment and no delta: the
+ * balance rule reads it as a **reset** from its date onward
+ * (`domain/stores.ts`), so what is stored is simply what was in the store.
+ *
+ * Recording the difference instead would make the count depend on whatever the
+ * ledger happened to say when it was typed — and a backdated delivery arriving
+ * later would silently change what the count meant.
+ */
+export async function recordStockCount(input: StockCountInput): Promise<StockCount> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  return db.transaction("rw", db.stockCounts, db.outbox, async () => {
+    const count: StockCount = {
+      id: newId(),
+      created_at: at,
+      updated_at: at,
+      device_id,
+      deleted_at: null,
+      store_id: input.store_id,
+      produce_type_id: input.produce_type_id,
+      date: input.date,
+      // Null means the sacks were not counted, which is not the same as zero
+      // and is what keeps the sack balance honest (SPEC 20.8).
+      counted_sacks: input.counted_sacks ?? null,
+      counted_kg: input.counted_kg,
+      notes: input.notes?.trim() || null,
+    };
+
+    await db.stockCounts.add(count);
+    await enqueue(db, "insert", "stock_count", count, {
+      store_id: count.store_id,
+      produce_type_id: count.produce_type_id,
+      date: count.date,
+      counted_sacks: count.counted_sacks,
+      counted_kg: count.counted_kg,
+      notes: count.notes,
+    });
+    return count;
+  });
+}

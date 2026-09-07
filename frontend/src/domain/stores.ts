@@ -313,3 +313,141 @@ export function sackWeightWarning(
     "Is that right?"
   );
 }
+
+
+/**
+ * SPEC 20.7 — the variance between a count and the ledger.
+ *
+ * Coffee loses weight as it dries, beans go to weevils, and sacks get
+ * miscounted. The difference is **stated in words, never silently absorbed** —
+ * absorbing it is how a ledger quietly stops matching the store, and the only
+ * remaining way to correct it would be to invent a fake outtake, polluting the
+ * reasons that make this feature worth having.
+ *
+ * Finding more than the ledger says is as ordinary as finding less (SPEC
+ * 20.14.4) and is worded the same way round.
+ */
+export interface Variance {
+  /** Counted less ledger. Positive means more was found than expected. */
+  kgDelta: number;
+  sacksDelta: number | null;
+  /** The whole thing in words, ready to show. Null when there is nothing to
+   *  say, which is a count that matched. */
+  words: string | null;
+  /** SPEC 20.12 — off by more than a tenth, which is worth an alert. */
+  large: boolean;
+}
+
+/** More than this share off the ledger is worth raising (SPEC 20.12). */
+const LARGE_VARIANCE = 0.1;
+
+export function varianceAgainst(
+  ledgerKg: number,
+  ledgerSacks: number,
+  countedKg: number,
+  countedSacks: number | null,
+): Variance {
+  const kgDelta = roundKg(countedKg - ledgerKg);
+  const sacksDelta = countedSacks === null ? null : countedSacks - ledgerSacks;
+
+  const parts: string[] = [];
+  if (sacksDelta !== null && sacksDelta !== 0) {
+    parts.push(
+      `Counted ${countedSacks} ${plural(countedSacks!, "sack")}, ` +
+        `ledger says ${ledgerSacks} — ${Math.abs(sacksDelta)} ` +
+        `${plural(Math.abs(sacksDelta), "sack")} ${sacksDelta < 0 ? "short" : "more than the ledger"}.`,
+    );
+  }
+  if (kgDelta !== 0) {
+    parts.push(
+      `Counted ${formatNumber(countedKg)} kg, ledger says ${formatNumber(ledgerKg)} — ` +
+        `${formatNumber(Math.abs(kgDelta))} kg ${kgDelta < 0 ? "short" : "more than the ledger"}.`,
+    );
+  }
+
+  // Measured on weight, which is the figure that is always present: `kg` is
+  // required on every event and sacks never are (SPEC 20.8). A ledger of zero
+  // cannot be a proportion of anything, so any count against it that finds
+  // something is large by definition.
+  const large =
+    ledgerKg === 0
+      ? countedKg > 0
+      : Math.abs(kgDelta) / ledgerKg > LARGE_VARIANCE;
+
+  return { kgDelta, sacksDelta, words: parts.length > 0 ? parts.join(" ") : null, large };
+}
+
+function plural(count: number, singular: string): string {
+  return count === 1 ? singular : `${singular}s`;
+}
+
+function formatNumber(value: number): string {
+  return roundKg(value).toLocaleString("en-UG");
+}
+
+/**
+ * The ledger as it stood immediately before each count, so a count can be
+ * judged against what it was correcting.
+ *
+ * Folded up to but excluding the count itself, in the same date-then-created_at
+ * order the balance uses. Comparing against today's balance instead would be
+ * wrong twice over: later deliveries would have moved it, and the count itself
+ * has already reset it — a count always agrees with a balance it just set.
+ */
+export interface CountedVariance {
+  count: StockCount;
+  ledgerKg: number;
+  ledgerSacks: number;
+  variance: Variance;
+}
+
+export function countVariances(input: StockInput): CountedVariance[] {
+  const streams = stream(input);
+  const byId = new Map(input.counts.filter((c) => !c.deleted_at).map((c) => [c.id, c]));
+  const out: CountedVariance[] = [];
+
+  for (const [k, steps] of streams) {
+    const [store_id, produce_type_id] = k.split(" ") as [string, string];
+    const ordered = [...steps].sort((a, b) =>
+      a.date === b.date ? a.created_at.localeCompare(b.created_at) : a.date < b.date ? -1 : 1,
+    );
+
+    for (const [index, step] of ordered.entries()) {
+      if (step.kind !== "count") continue;
+      const before = fold(ordered.slice(0, index), step.date);
+      const count = input.counts.find(
+        (c) =>
+          !c.deleted_at &&
+          c.store_id === store_id &&
+          c.produce_type_id === produce_type_id &&
+          c.date === step.date &&
+          c.created_at === step.created_at,
+      );
+      if (!count || !byId.has(count.id)) continue;
+
+      out.push({
+        count,
+        ledgerKg: before.kg,
+        ledgerSacks: before.sacks,
+        variance: varianceAgainst(before.kg, before.sacks, step.kg, step.sacks),
+      });
+    }
+  }
+  return out;
+}
+
+/** When each store and produce type was last counted, for the 90-day rule. */
+export function lastCountDates(input: StockInput): Map<string, string> {
+  const latest = new Map<string, string>();
+  for (const count of input.counts) {
+    if (count.deleted_at) continue;
+    const k = key(count.store_id, count.produce_type_id);
+    const held = latest.get(k);
+    if (held === undefined || count.date > held) latest.set(k, count.date);
+  }
+  return latest;
+}
+
+export function balanceKey(store_id: string, produce_type_id: string): string {
+  return key(store_id, produce_type_id);
+}

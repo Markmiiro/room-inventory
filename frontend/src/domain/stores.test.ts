@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { StockCount, StockIntake, StockOuttake } from "../db/types";
-import { averageCostPerKg, balanceFor, balancesAsAt, sackWeightWarning } from "./stores";
+import {
+  averageCostPerKg,
+  balanceFor,
+  balancesAsAt,
+  countVariances,
+  lastCountDates,
+  sackWeightWarning,
+  varianceAgainst,
+} from "./stores";
 
 /**
  * SPEC 20.8 — the derived balance.
@@ -477,5 +485,98 @@ describe("the sack weight warning", () => {
     const quiet = sackWeightWarning("Coffee", 60, 10, 620);
     expect(typeof warned).toBe("string");
     expect(quiet).toBeNull();
+  });
+});
+
+
+/**
+ * SPEC 20.7 and 20.14.4 — the variance.
+ *
+ * Stated in words, never silently absorbed. Finding more than the ledger says
+ * is as ordinary as finding less and is worded the same way round.
+ */
+describe("the variance between a count and the ledger", () => {
+  it("names both figures and how far short it is", () => {
+    const v = varianceAgainst(2914, 47, 2700, 43);
+    expect(v.words).toContain("Counted 43 sacks");
+    expect(v.words).toContain("ledger says 47");
+    expect(v.words).toContain("4 sacks short");
+  });
+
+  /** SPEC 20.14.4 — perfectly normal, and handled identically. */
+  it("words finding more the same way round", () => {
+    const v = varianceAgainst(2914, 43, 2914, 47);
+    expect(v.words).toContain("4 sacks more than the ledger");
+    expect(v.sacksDelta).toBe(4);
+  });
+
+  it("says nothing when the count matches", () => {
+    expect(varianceAgainst(2914, 47, 2914, 47).words).toBeNull();
+  });
+
+  it("reports a weight difference even when sacks match", () => {
+    const v = varianceAgainst(2914, 47, 2700, 47);
+    expect(v.words).toContain("214 kg short");
+  });
+
+  it("works when sacks were not counted at all", () => {
+    const v = varianceAgainst(2914, 47, 2700, null);
+    expect(v.sacksDelta).toBeNull();
+    expect(v.words).toContain("214 kg short");
+    expect(v.words).not.toContain("sacks");
+  });
+
+  /** SPEC 20.12 — more than a tenth off the ledger is worth an alert. */
+  it("flags a large variance but not a small one", () => {
+    expect(varianceAgainst(1000, 10, 850, 9).large).toBe(true);
+    expect(varianceAgainst(1000, 10, 950, 10).large).toBe(false);
+    expect(varianceAgainst(1000, 10, 1200, 12).large).toBe(true);
+  });
+
+  /** A ledger of zero cannot be a proportion of anything, so anything found
+   *  against it is large by definition. */
+  it("treats finding stock the ledger says is not there as large", () => {
+    expect(varianceAgainst(0, 0, 300, 5).large).toBe(true);
+    expect(varianceAgainst(0, 0, 0, 0).large).toBe(false);
+  });
+});
+
+describe("judging a count against the ledger it corrected", () => {
+  /**
+   * The ledger *before* the count, not today's balance. Comparing against
+   * today would be wrong twice over: later deliveries would have moved it, and
+   * the count itself has already reset it — a count always agrees with a
+   * balance it just set.
+   */
+  it("compares against what the records said at the time", () => {
+    const [first] = countVariances({
+      ...empty,
+      intakes: [
+        intake({ id: "a", date: "2026-03-01", kg: 1000, sacks: 16 }),
+        // A later delivery, which must not move the comparison.
+        intake({ id: "b", date: "2026-08-01", kg: 5000, sacks: 80 }),
+      ],
+      counts: [count({ date: "2026-05-01", counted_kg: 850, counted_sacks: 14 })],
+    });
+
+    expect(first!.ledgerKg).toBe(1000);
+    expect(first!.variance.kgDelta).toBe(-150);
+    expect(first!.variance.large).toBe(true);
+  });
+
+  it("reports nothing when there are no counts", () => {
+    expect(countVariances({ ...empty, intakes: [intake()] })).toEqual([]);
+  });
+
+  it("finds the last count date per store and produce type", () => {
+    const dates = lastCountDates({
+      ...empty,
+      counts: [
+        count({ id: "c1", date: "2026-05-01" }),
+        count({ id: "c2", date: "2026-07-01" }),
+        count({ id: "c3", store_id: S2, date: "2026-02-01" }),
+      ],
+    });
+    expect([...dates.values()].sort()).toEqual(["2026-02-01", "2026-07-01"]);
   });
 });

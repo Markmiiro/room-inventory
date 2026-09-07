@@ -1,8 +1,10 @@
 import type {
   HealthRecord,
   Move,
+  ProduceType,
   Record_,
   Room,
+  Store,
   TreatmentSchedule,
   Vet,
   VetVisit,
@@ -10,6 +12,13 @@ import type {
 import { AGE_UNKNOWN_DETAIL, recordsWithUnknownAge } from "./age";
 import { addDays, daysBetween } from "./format";
 import { currentRoomId, isOverCapacity, occupancy } from "./rules";
+import {
+  balanceKey,
+  balancesAsAt,
+  countVariances,
+  lastCountDates,
+  type StockInput,
+} from "./stores";
 import { scheduleDueItems, type DueItem } from "./schedules";
 
 /**
@@ -43,7 +52,12 @@ export type AlertKind =
   | "no_date_of_birth"
   // SPEC 14.2 — a planned visit "appears on the Calendar and in Alerts as it
   // approaches".
-  | "planned_visit";
+  | "planned_visit"
+  // SPEC 20.12 — the produce stores.
+  | "store_negative"
+  | "store_over_capacity"
+  | "stock_count_overdue"
+  | "large_variance";
 
 export interface Alert {
   /** Stable across recomputations, so React keys and "seen" state hold still. */
@@ -85,9 +99,16 @@ export interface AlertInputs {
   pendingCount?: number;
   /** Now, for the one rule measured in hours rather than days. */
   now?: Date;
+  /** SPEC 20.12 — the produce stores. Defaulted so every existing caller and
+   *  test keeps working unchanged. */
+  stores?: Store[];
+  produceTypes?: ProduceType[];
+  stock?: StockInput;
 }
 
 const SYNC_FAILING_HOURS = 48;
+/** SPEC 20.12 — how long a store and produce type may go uncounted. */
+const STOCK_COUNT_DAYS = 90;
 const LONG_ISOLATION_DAYS = 14;
 const DUE_SOON_DAYS = 7;
 const DUE_LATER_DAYS = 30;
@@ -132,6 +153,9 @@ export function computeAlerts(inputs: AlertInputs): Alert[] {
     ...syncFailing(inputs),
     ...longIsolationStays(roomById, active, moves, today),
     ...duplicateTags(active),
+    // SPEC 20.12 — added to the existing rules rather than derived separately,
+    // so Alerts, Rooms and Calendar cannot disagree about them.
+    ...storeAlerts(inputs),
   ];
 
   return alerts.sort(
@@ -537,4 +561,125 @@ export function byPriority(alerts: Alert[]): Array<[AlertPriority, Alert[]]> {
 
 function plural(count: number, singular: string): string {
   return count === 1 ? singular : `${singular}s`;
+}
+
+
+/**
+ * SPEC 20.12 — the produce store conditions.
+ *
+ * Four rules, all reading the same derived balance the screens read
+ * (`domain/stores.ts`). None of them recomputes anything: an alert that
+ * disagreed with the store card it points at would be worse than no alert.
+ *
+ * Silent on a farm with no stock events, which is every farm until the first
+ * delivery — so this costs nothing to have switched on from the start.
+ */
+function storeAlerts(inputs: AlertInputs): Alert[] {
+  const stock = inputs.stock;
+  if (!stock) return [];
+
+  const stores = (inputs.stores ?? []).filter((s) => !s.deleted_at);
+  const types = (inputs.produceTypes ?? []).filter((p) => !p.deleted_at);
+  if (stores.length === 0) return [];
+
+  const storeById = new Map(stores.map((s) => [s.id, s]));
+  const typeById = new Map(types.map((p) => [p.id, p]));
+  const balances = balancesAsAt(inputs.today, stock);
+  const alerts: Alert[] = [];
+
+  for (const balance of balances) {
+    const store = storeById.get(balance.store_id);
+    const type = typeById.get(balance.produce_type_id);
+    if (!store || !type) continue;
+
+    /**
+     * Urgent. SPEC 20.14.1 and 20.14.2: both outtakes are kept and the balance
+     * clamps at zero, so without this the overdraw leaves no trace on any
+     * screen — the store simply reads empty, which is also what an empty store
+     * reads like.
+     */
+    if (balance.wentNegative) {
+      alerts.push({
+        id: `store-negative-${store.id}-${type.id}`,
+        kind: "store_negative",
+        priority: "urgent",
+        title: `More ${type.name} has left ${store.name} than went in`,
+        detail:
+          "The balance stops at zero rather than going negative, and nothing has been " +
+          "discarded. A stock count will set it straight.",
+      });
+    }
+  }
+
+  // SPEC 20.12 — over capacity is measured in sacks across the whole store, not
+  // per produce type: a store is full of sacks whatever is in them.
+  for (const store of stores) {
+    if (store.capacity_sacks === null) continue;
+    const sacks = balances
+      .filter((b) => b.store_id === store.id)
+      .reduce((sum, b) => sum + b.sacks, 0);
+    if (sacks <= store.capacity_sacks) continue;
+
+    alerts.push({
+      id: `store-capacity-${store.id}`,
+      kind: "store_over_capacity",
+      priority: "this_week",
+      title: `${store.name} is over capacity`,
+      detail: `${sacks} sacks in a store that holds ${store.capacity_sacks}.`,
+    });
+  }
+
+  /**
+   * SPEC 20.12 — nothing counted in ninety days, per store and produce type,
+   * **where stock exists**. A store holding nothing does not need counting, and
+   * saying so every ninety days would train people to ignore the whole list.
+   */
+  const counted = lastCountDates(stock);
+  for (const balance of balances) {
+    const store = storeById.get(balance.store_id);
+    const type = typeById.get(balance.produce_type_id);
+    if (!store || !type || balance.kg <= 0) continue;
+
+    const last = counted.get(balanceKey(balance.store_id, balance.produce_type_id));
+    const days = last === undefined ? null : daysBetween(last, inputs.today);
+    if (days !== null && days <= STOCK_COUNT_DAYS) continue;
+
+    alerts.push({
+      id: `stock-count-${store.id}-${type.id}`,
+      kind: "stock_count_overdue",
+      priority: "later",
+      title: `${type.name} in ${store.name} has not been counted`,
+      detail:
+        last === null || last === undefined
+          ? "There has never been a stock count for this. Counting it is how the records " +
+            "and the store are kept in step."
+          : `Last counted ${days} days ago.`,
+      date: last ?? undefined,
+    });
+  }
+
+  /**
+   * SPEC 20.12 — a count that differed from the ledger by more than a tenth.
+   *
+   * It is raised against the count rather than the store, so it stays put once
+   * the balance has moved on: the point is that something was wrong then, and
+   * it is worth knowing why.
+   */
+  for (const { count, variance } of countVariances(stock)) {
+    if (!variance.large || !variance.words) continue;
+    const store = storeById.get(count.store_id);
+    const type = typeById.get(count.produce_type_id);
+    if (!store || !type) continue;
+
+    alerts.push({
+      id: `variance-${count.id}`,
+      kind: "large_variance",
+      priority: "this_week",
+      title: `${type.name} in ${store.name} counted differently from the records`,
+      detail: variance.words,
+      date: count.date,
+    });
+  }
+
+  return alerts;
 }

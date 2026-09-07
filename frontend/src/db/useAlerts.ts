@@ -3,8 +3,10 @@ import { useMemo } from "react";
 import type {
   HealthRecord,
   Move,
+  ProduceType,
   Record_,
   Room,
+  Store,
   TreatmentSchedule,
   Vet,
   VetVisit,
@@ -12,14 +14,18 @@ import type {
 import {
   allHealth,
   allMoves,
+  allProduceTypes,
   allSchedules,
+  allStockEvents,
   allVetVisits,
   liveRooms,
+  liveStores,
   outboxAge,
 } from "./queries";
 import { db } from "./schema";
 import { todayInEAT } from "./ids";
 import { computeAlerts, type Alert } from "../domain/alerts";
+import type { StockInput } from "../domain/stores";
 import { useLiveQuery } from "../sync/useSync";
 
 /**
@@ -30,6 +36,8 @@ import { useLiveQuery } from "../sync/useSync";
  * Rooms, Room detail and Calendar all call this, so all four are looking at the
  * same answers rather than four near-copies of the rules.
  */
+const NO_STOCK: StockInput = { intakes: [], outtakes: [], counts: [] };
+
 export function useAlerts(): Alert[] {
   const rooms = useLiveQuery(liveRooms, [], [] as Room[]);
   // Every record, not just the active ones: the rules decide for themselves
@@ -44,6 +52,11 @@ export function useAlerts(): Alert[] {
   const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
   const vets = useLiveQuery(() => db.vets.toArray(), [], [] as Vet[]);
   const outbox = useLiveQuery(outboxAge, [], { count: 0, oldestQueuedAt: null });
+  // SPEC 20.12 — the produce store rules read the same derived balance the
+  // store screens read, so an alert can never disagree with the card it names.
+  const stores = useLiveQuery(liveStores, [], [] as Store[]);
+  const produceTypes = useLiveQuery(allProduceTypes, [], [] as ProduceType[]);
+  const stock = useLiveQuery(allStockEvents, [], NO_STOCK);
 
   return useMemo(
     () =>
@@ -58,7 +71,10 @@ export function useAlerts(): Alert[] {
         today: todayInEAT(),
         oldestPendingAt: outbox.oldestQueuedAt,
         pendingCount: outbox.count,
+        stores,
+        produceTypes,
+        stock,
       }),
-    [rooms, records, moves, health, schedules, visits, vets, outbox],
+    [rooms, records, moves, health, schedules, visits, vets, outbox, stores, produceTypes, stock],
   );
 }

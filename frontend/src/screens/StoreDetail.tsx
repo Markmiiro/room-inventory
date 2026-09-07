@@ -244,6 +244,11 @@ export function StoreDetailScreen() {
         <Link to={`/stock/in?store=${store.id}`} className="btn-secondary w-full">
           Add stock
         </Link>
+        {/* SPEC 20.7 — reachable from the store it is about, which is where
+            someone standing in front of the sacks will look for it. */}
+        <Link to={`/stock/count?store=${store.id}`} className="btn-quiet w-full">
+          Stock count
+        </Link>
       </div>
     </div>
   );
