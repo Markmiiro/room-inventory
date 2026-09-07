@@ -63,6 +63,10 @@ These words appear in the UI exactly as written. No synonyms, ever.
 
 Code identifiers match: `room`, `move`, `animal`, `group`.
 
+Section 20.2 adds the produce vocabulary — Store, Produce, Sack, Intake,
+Outtake, Stock count — and the words banned alongside them. **A store is not a
+room**, in the UI or in the data model.
+
 ---
 
 ## 3. Data model
@@ -582,6 +586,10 @@ record, and how they are reached is a decision, not an oversight:
 
 Neither is added to the bottom bar. Five is the number, and Rooms, Animals,
 Calendar, Money and More are the five.
+
+Section 20.15 reopens this for Stores, which is a daily screen during harvest
+rather than a place you go when something is wrong. That question is open, not
+settled — see 20.16.
 
 ---
 
@@ -1120,3 +1128,345 @@ Nothing here re-derives a figure that already exists.
 - `domain/census.ts` — the counting rule above.
 - `components/PeriodSelector.tsx` — one selector, so both tabs always offer the
   same choices.
+
+---
+
+*Merged from `SPEC-STORES.md`. Everything already in this document still applies
+to section 20 — client-generated ULIDs, event-versus-state entities,
+offline-first sync, head counts never percentages, one yellow button per screen,
+and colour never carrying meaning alone.*
+
+## 20. Stores and produce
+
+### 20.1 What this is
+
+The farm has two stores holding harvested and bought produce — coffee, maize and
+beans. The app must answer: how many sacks are in each store, what they weigh,
+what has left and why, what was sold and for how much, and what came in and
+where it came from.
+
+This is a **second inventory running alongside the livestock one**. It shares
+the app, the sync engine, the design language and the money figures. It does not
+share the data model. Produce is measured in kilograms and sacks; animals are
+counted in head. Conflating the two corrupts both.
+
+### 20.2 Vocabulary
+
+| Use | Never use |
+|---|---|
+| **Store** | warehouse, granary, silo, room |
+| **Produce** | crop, goods, commodity |
+| **Sack** | bag, bale bag |
+| **Intake** | delivery, receipt, stock-in |
+| **Outtake** | withdrawal, issue, stock-out |
+| **Stock count** | audit, stock-take |
+
+**A store is not a Room.** Do not reuse the Room entity. Rooms have a capacity in
+head, a species type and animals inside them; putting sacks in one would corrupt
+occupancy, room type derivation and every alert that reads them.
+
+### 20.3 Store (state entity)
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `code` | string | yes | `S1`, `S2`. Unique. Displayed in mono |
+| `name` | string | yes | Plain name, e.g. "Upper store" |
+| `capacity_sacks` | integer | no | Optional. Warns when exceeded, never blocks |
+| `notes` | text | no | |
+
+Seeded with two stores at fixed ids, the same pattern as the ten rooms —
+identical in the migration and the client seed, or two devices seeding offline
+produce four stores.
+
+### 20.4 ProduceType (state entity)
+
+`name` (required, unique), `is_active`, `notes`.
+
+**Seeded with Coffee, Maize and Beans**, at fixed ids, and the user can add more
+— groundnuts, matooke, whatever the farm grows next. Never a hardcoded enum.
+This is the mistake the species enum made, which then took a nine-file migration
+to undo.
+
+### 20.5 StockIntake (event)
+
+Produce arriving in a store.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `store_id` | string | yes | |
+| `produce_type_id` | string | yes | |
+| `date` | date | yes | Defaults to today |
+| `sacks` | integer | no | How many sacks |
+| `kg` | number | yes | Total weight |
+| `source` | enum | yes | `garden` or `bought` |
+| `garden_name` | string | no | Which garden, when source is garden |
+| `seller` | string | no | When source is bought |
+| `customer_id` | string | no | Optional link to a Customer, when bought from a known supplier |
+| `cost` | integer | no | UGX. Required when source is `bought`, absent when `garden` |
+| `harvest_label` | string | no | Free text, e.g. "March 2026". See 20.16 Q2 |
+| `notes` | text | no | |
+
+`harvest_label` is a **label, not a lot**. It records which harvest a delivery
+came from without giving it a separate balance or valuation, because nothing can
+say which physical kilograms later left a pooled store. It costs nothing at
+entry and accrues from day one, so a farm that later needs true lots has
+labelled intake history to seed them from.
+
+### 20.6 StockOuttake (event)
+
+Produce leaving a store.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `store_id` | string | yes | |
+| `produce_type_id` | string | yes | |
+| `date` | date | yes | Defaults to today |
+| `sacks` | integer | no | |
+| `kg` | number | yes | |
+| `reason` | enum | yes | See below |
+| `price_basis` | enum | no | `kg` or `sack`. What was negotiated. Only when `sold` |
+| `unit_price` | integer | no | UGX per kg or per sack, per `price_basis`. Only when `sold` |
+| `total_price` | integer | no | UGX. **The stored truth.** Only when `sold` |
+| `customer_id` | string | no | The buyer, when sold |
+| `to_store_id` | string | no | Only when reason is `moved` |
+| `notes` | text | no | |
+
+**`total_price` is authoritative; `unit_price` is what was typed.** A sale
+negotiated per sack must not be back-computed into a price per kilogram — 20.8
+forbids deriving either quantity from the other, and a farm may well sell coffee
+by the kilogram and maize by the sack. The form offers a per kg / per sack
+toggle, multiplies out, and stores the total. Every money figure reads the
+total, so none of them depends on how the deal was worded.
+
+**Reasons:** `sold`, `home_use`, `seed`, `gift`, `spoiled`, `processing`,
+`moved`, `other`. A reason is always required — "what left the store and why" is
+the whole point of the feature, and an unexplained outtake is a hole in the
+records.
+
+**Moving between the two stores** is one outtake with reason `moved` and a
+`to_store_id`, which the app mirrors as a matching intake in the destination.
+Both carry the same date and quantities. The pair must be created in one
+transaction so a half-completed move can't leave produce in neither store.
+
+### 20.7 StockCount (event)
+
+A physical count, reconciling the ledger against what is actually in the store.
+
+`store_id`, `produce_type_id`, `date`, `counted_sacks`, `counted_kg`, `notes`.
+
+**This is not optional decoration.** Coffee loses weight as it dries, beans are
+taken by weevils, and sacks get miscounted. Without a stock count the ledger
+drifts from reality and there is no honest way to correct it — people would
+otherwise invent a fake outtake, which pollutes the reasons that make this
+feature useful.
+
+The difference between the counted figure and the derived balance is the
+**variance**. It is displayed in words, never silently absorbed:
+*"Counted 43 sacks, ledger says 47 — 4 sacks short."*
+
+### 20.8 The balance is derived, never stored
+
+For each `(store_id, produce_type_id)`:
+
+```
+sacks = Σ intake.sacks − Σ outtake.sacks, adjusted by the latest stock count
+kg    = Σ intake.kg    − Σ outtake.kg,    adjusted by the latest stock count
+```
+
+A stock count resets the running total to the counted figure from its date
+onward. Events after it accumulate from there.
+
+Same rule as `head_count` in SPEC 3.4: **computed from events, never synced as a
+field.** Two devices selling from the same store offline would otherwise each
+push their own arithmetic and the later one would erase a real sale.
+
+**Sacks and kilograms are tracked independently. Neither is derived from the
+other.** A sack of coffee and a sack of maize weigh different amounts, and two
+sacks of the same coffee are not identical. The app may display an average sack
+weight as information — *"about 62 kg per sack"* — but must never compute one
+figure from the other or use an assumed sack weight anywhere.
+
+`kg` is required on every event; `sacks` is optional. Weight is what gets sold
+and what determines value; sacks are a physical count for checking the store.
+If sacks are entered on some events and not others, the sack balance is marked
+**"partial"** on screen rather than shown as though it were complete.
+
+### 20.9 What produce is worth
+
+**Weighted average cost per kilogram**, per store per produce type.
+
+- **Bought produce** enters at its purchase cost.
+- **Garden produce enters at zero cost.** Growing it cost money — labour, seed,
+  fertiliser — but those are already recorded as Expenses. Giving it a second
+  notional cost here would count the same money twice and understate the farm's
+  profit.
+
+State this on screen in words wherever a produce value appears. A figure that
+looks like a valuation but isn't one is exactly the failure the head-day
+allocation was built to avoid.
+
+### 20.10 Money
+
+Produce money joins the farm's figures, broken out rather than blended:
+
+- **A `sold` outtake is income.** It appears in the farm profit and loss for its
+  period, and gets its own row in Money → Analytics beside the species.
+- **A `bought` intake is a cost**, the same way an animal purchase is.
+- **Garden intakes are neither.** They add stock at zero cost.
+- **Money → Analytics** gains a Produce section: for each type, kilograms in,
+  kilograms out, spent, earned, difference.
+- **The census in Analytics** gains produce alongside the headcount — *"Coffee
+  1,240 kg · Maize 380 kg"* — using the same date-bounded replay so there is one
+  counting rule, not two.
+
+Outtakes for `home_use`, `seed`, `gift` and `spoiled` earn nothing, and their
+value at average cost should be visible somewhere. Spoilage in particular is a
+real loss the farm should be able to see.
+
+### 20.11 Screens
+
+**Stores** — the entry point. Each store as a card: code, name, and a line per
+produce type showing sacks and kilograms. A store holding nothing says so. Under
+the cards, a farm total per produce type across both stores.
+
+**Store detail** — what's in this store, one row per produce type with the
+current balance, average sack weight, and value at average cost clearly labelled
+as an estimate. Two tabs: **Stock** and **History**. History is every intake,
+outtake and count in date order, each showing quantity, reason and money where
+there is any. One yellow button: **"Take out"**, since removing stock is the
+frequent action.
+
+**Add stock** — store, produce type, date defaulting to today, sacks, kilograms,
+then source as two large cards: **From garden** or **Bought**. Garden reveals the
+garden name. Bought reveals cost and seller, with the seller selectable from
+Customers or created inline.
+
+**Take out stock** — store, produce type, date, sacks, kilograms, then reason as
+pill chips. Choosing **Sold** reveals price per kilogram, with the total computed
+and shown large as it is typed, plus the buyer from Customers or created inline.
+Choosing **Moved** reveals the destination store. All other reasons need only a
+note. Above the quantity field, show what is currently in the store, so nobody
+has to remember.
+
+**Stock count** — pick store and produce type, see the ledger balance, enter what
+was actually counted, and see the variance stated in words before confirming.
+
+**Manage stores** and **Manage produce types** — under More.
+
+### 20.12 Alerts
+
+Added to the existing rules in `domain/alerts.ts`, not derived separately:
+
+| Alert | Condition | Priority |
+|---|---|---|
+| Store balance went negative | An outtake took a balance below zero | Urgent |
+| Store over capacity | Sacks exceed `capacity_sacks` | This week |
+| No stock count in 90 days | Per store and produce type, where stock exists | Later |
+| Large variance | A stock count differs from the ledger by more than 10% | This week |
+
+### 20.13 Sync
+
+Stores and produce types are **state** entities with per-field last-write-wins.
+Intakes, outtakes and stock counts are **events**, append-only.
+
+**Note the `record_id` trap.** `_apply_event` in `backend/app/sync.py` previously
+read `fields["record_id"]` unconditionally, which crashed on expenses and killed
+whole batches. Stock events have no `record_id` either. That was fixed during
+Batch D — confirm the fix covers these new tables rather than assuming.
+
+### 20.14 Edge cases
+
+**20.14.1 Taking out more than is there.** Warn before confirming, naming the
+current balance, but allow it — the produce may physically be there when the
+ledger is wrong. The balance clamps at zero, both events are kept, and an alert
+is raised. Same rule as SPEC 6.7 for oversold groups.
+
+**20.14.2 Two devices selling the same stock offline.** Both outtakes are kept.
+Neither is rejected — data already entered offline is never thrown away. The
+balance clamps and the alert names the store.
+
+**20.14.3 Sacks entered on some events but not others.** The sack balance is
+shown with a **"partial"** label. Kilograms remain exact.
+
+**20.14.4 A stock count that finds more than the ledger.** Perfectly normal, and
+handled identically to finding less. The variance reads *"4 sacks more than the
+ledger"*.
+
+**20.14.5 Deleting a store or produce type with stock.** Blocked while a balance
+exists. Offer to move the stock first. Produce types with history are archived,
+never deleted.
+
+**20.14.6 Future dates.** Intakes, outtakes and counts cannot be dated in the
+future. Backdating to any date up to today is allowed and recomputes the
+balance.
+
+**20.14.7 Moving to the same store.** The current store is not selectable as a
+destination.
+
+**20.14.8 A move where the mirrored intake fails.** Impossible by construction —
+outtake and intake are written in one transaction, or neither is.
+
+### 20.15 Where it lives in the navigation
+
+**A sixth item, Stores**, between Animals and Calendar.
+
+SPEC 11 fixes five destinations and says "five is the number". That was written
+when the app held only livestock. During harvest this is a daily screen, and
+burying a daily screen under More costs more than a sixth tab does.
+
+Measured in Chrome before it went in, rather than estimated — the species chips
+looked fine by estimate and were 100px too wide when checked:
+
+| Viewport | Tab width | Widest label | Clipped | Tap height |
+|---|---|---|---|---|
+| 390px | 65px | Calendar, 62px | none | 62px |
+| 360px | 60px | Calendar, 62px | none | 62px |
+| 320px | 51px | Calendar, 62px | none | 62px |
+
+Six fits, with room to spare at 390px and none clipped even at 320px. `Calendar`
+is the constraint; a seventh destination, or a label longer than it, would need
+measuring again rather than assuming.
+
+### 20.16 Decisions
+
+Answered before Batch G. Recorded here with their reasoning, because each one
+is cheaper to understand than to rediscover.
+
+**1. Price entry — a toggle, with the total stored.** Sales may be negotiated
+per kilogram or per sack, so the form offers both and stores `total_price`. See
+20.6.
+
+**2. Produce is pooled, not held in lots.** One balance per store per produce
+type at weighted average cost, plus a free-text `harvest_label` on intakes
+(20.5).
+
+The cost of this choice is that the weighted average blends harvests: the app
+cannot say what the March coffee fetched against the September coffee.
+
+The cost of the alternative was higher. Lots need an allocation from each
+outtake to the lots it drew from — a many-to-many relationship this app has
+nowhere else — and a mandatory lot picker on the action 20.11 names as the
+frequent one. More seriously, lot balances are only honest if the lots are
+physically separable in the store; co-mingled sacks would make them precise-
+looking fiction, which is the failure 20.9 and 4.4 exist to refuse.
+
+Reversibility is asymmetric and was the deciding factor. Lots collapse to pooled
+for free. Pooled expands to lots mechanically in code, but **the history does not
+come with it** — nothing can retroactively say which kilograms left in June — so
+lots would begin from the switchover date. `harvest_label` is the hedge: it costs
+nothing now and leaves labelled intake history to seed lots from later.
+
+**3. One farm profit figure, with produce broken out.** Produce sales and bought
+intakes join 4.5's farm total; produce also gets its own line and its own
+Analytics section. Excluding it would make the headline wrong in exactly the
+season it matters most.
+
+Expect the farm figure to swing sharply positive when garden produce is sold:
+it entered at zero cost (20.9) because growing it was already recorded as
+Expenses, so the whole sale price lands with no matching cost. That is correct
+rather than double-counted, and **the screen must say so in words.**
+
+**4. Typical sack weights — still open.** Needed only to flag an entry that
+looks like a typo, never to compute from (20.8). Until the farm's real figures
+are supplied, no weight-based typo warning ships; its absence is silent and
+nothing else depends on it.

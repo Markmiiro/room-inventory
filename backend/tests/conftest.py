@@ -222,3 +222,68 @@ def push(client, device_id: str, operations: list[dict]):
 
 def statuses(body: dict) -> list[str]:
     return [r["status"] for r in body["results"]]
+
+
+# --------------------------------------------------------------------------
+# SPEC 20 — stores and produce
+# --------------------------------------------------------------------------
+
+# The seeded IDs from migration 0010. Fixed on purpose, and identical to
+# frontend/src/db/seed.ts.
+STORE_1 = "0000000000000000000000T001"
+STORE_2 = "0000000000000000000000T002"
+PRODUCE_BEANS = "0000000000000000000000P001"
+PRODUCE_COFFEE = "0000000000000000000000P002"
+
+
+def op_store(id_: str, at: str, **fields):
+    data = {"code": "S9", "name": "Test store", "capacity_sacks": None}
+    data.update(fields)
+    return {"op": "upsert", "entity": "store", "id": id_, "data": data, "updated_at": at}
+
+
+def op_produce_type(id_: str, at: str, **fields):
+    data = {"name": "Groundnuts", "is_active": True}
+    data.update(fields)
+    return {"op": "upsert", "entity": "produce_type", "id": id_, "data": data, "updated_at": at}
+
+
+def op_intake(id_: str, at: str, **fields):
+    data = {
+        "store_id": STORE_1,
+        "produce_type_id": PRODUCE_COFFEE,
+        "date": "2026-03-01",
+        "sacks": 10,
+        "kg": 620,
+        "source": "garden",
+    }
+    data.update(fields)
+    return {"op": "insert", "entity": "stock_intake", "id": id_, "data": data, "updated_at": at}
+
+
+def op_outtake(id_: str, at: str, **fields):
+    data = {
+        "store_id": STORE_1,
+        "produce_type_id": PRODUCE_COFFEE,
+        "date": "2026-04-01",
+        "sacks": 4,
+        "kg": 248,
+        "reason": "sold",
+        "price_basis": "kg",
+        "unit_price": 4200,
+        "total_price": 1041600,
+    }
+    data.update(fields)
+    return {"op": "insert", "entity": "stock_outtake", "id": id_, "data": data, "updated_at": at}
+
+
+def op_stock_count(id_: str, at: str, **fields):
+    data = {
+        "store_id": STORE_1,
+        "produce_type_id": PRODUCE_COFFEE,
+        "date": "2026-05-01",
+        "counted_sacks": 5,
+        "counted_kg": 300,
+    }
+    data.update(fields)
+    return {"op": "insert", "entity": "stock_count", "id": id_, "data": data, "updated_at": at}

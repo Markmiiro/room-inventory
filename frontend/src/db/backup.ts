@@ -13,7 +13,10 @@ import { META, db, getMeta, setMeta } from "./schema";
  * Every table is included, the outbox included — an export taken offline should
  * still describe work that has not reached the server.
  */
-export const SCHEMA_VERSION = 2;
+/** Bumped whenever `BACKUP_TABLES` changes. An older file is refused rather
+ *  than restored with the newer tables silently empty — a restore that looks
+ *  like it worked and left the stores bare is worse than one that stops. */
+export const SCHEMA_VERSION = 3;
 
 export interface Backup {
   format: "room-inventory-backup";
@@ -37,6 +40,10 @@ export const BACKUP_TABLES = [
   // point the rows it dropped are gone. `schema_version` is bumped alongside
   // it, so an older file is refused rather than restored with these empty.
   "treatmentSchedules", "vetVisits", "visitNotes",
+  // SPEC 20. The produce inventory is the whole record of what is in the
+  // stores — the balance is derived from these events and exists nowhere else,
+  // so a backup without them restores a farm holding nothing.
+  "stores", "produceTypes", "stockIntakes", "stockOuttakes", "stockCounts",
   "outbox",
 ] as const;
 
@@ -44,7 +51,8 @@ export async function buildBackup(): Promise<Backup> {
   const [
     rooms, records, moves, purchases, healthRecords,
     sales, deaths, expenses, expenseCategories, customers, vets,
-    treatmentSchedules, vetVisits, visitNotes, outbox,
+    treatmentSchedules, vetVisits, visitNotes,
+    stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, outbox,
   ] = await Promise.all([
     db.rooms.toArray(),
     db.records.toArray(),
@@ -60,6 +68,11 @@ export async function buildBackup(): Promise<Backup> {
     db.treatmentSchedules.toArray(),
     db.vetVisits.toArray(),
     db.visitNotes.toArray(),
+    db.stores.toArray(),
+    db.produceTypes.toArray(),
+    db.stockIntakes.toArray(),
+    db.stockOuttakes.toArray(),
+    db.stockCounts.toArray(),
     db.outbox.toArray(),
   ]);
 
@@ -71,7 +84,8 @@ export async function buildBackup(): Promise<Backup> {
     tables: {
       rooms, records, moves, purchases, healthRecords,
       sales, deaths, expenses, expenseCategories, customers, vets,
-      treatmentSchedules, vetVisits, visitNotes, outbox,
+      treatmentSchedules, vetVisits, visitNotes,
+      stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, outbox,
     },
   };
 }
@@ -216,7 +230,8 @@ export async function restoreBackup(backup: Backup): Promise<ImportSummary> {
       db.rooms, db.records, db.moves, db.purchases, db.healthRecords,
       db.sales, db.deaths, db.expenses, db.expenseCategories,
       db.customers, db.vets, db.treatmentSchedules, db.vetVisits,
-      db.visitNotes, db.outbox, db.meta,
+      db.visitNotes, db.stores, db.produceTypes, db.stockIntakes,
+      db.stockOuttakes, db.stockCounts, db.outbox, db.meta,
     ],
     async () => {
       // Typed as a bare Dexie Table: the row shapes have nothing in common, and
@@ -236,6 +251,11 @@ export async function restoreBackup(backup: Backup): Promise<ImportSummary> {
         ["treatmentSchedules", db.treatmentSchedules as Table<unknown, unknown>],
         ["vetVisits", db.vetVisits as Table<unknown, unknown>],
         ["visitNotes", db.visitNotes as Table<unknown, unknown>],
+        ["stores", db.stores as Table<unknown, unknown>],
+        ["produceTypes", db.produceTypes as Table<unknown, unknown>],
+        ["stockIntakes", db.stockIntakes as Table<unknown, unknown>],
+        ["stockOuttakes", db.stockOuttakes as Table<unknown, unknown>],
+        ["stockCounts", db.stockCounts as Table<unknown, unknown>],
         ["outbox", db.outbox as Table<unknown, unknown>],
       ];
 

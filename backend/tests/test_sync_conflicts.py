@@ -389,7 +389,14 @@ def test_pull_returns_changes_across_entities_in_seq_order(client):
     seqs = [c["seq"] for c in body["changes"]]
 
     assert seqs == sorted(seqs)
-    assert {c["entity"] for c in body["changes"]} == {"room", "record", "move"}
+
+    entities = {c["entity"] for c in body["changes"]}
+    assert {"room", "record", "move"} <= entities
+    # SPEC 20.3 — migration 0010 seeds two stores and three produce types, and a
+    # device pulling from zero has to receive them. Asserted rather than merely
+    # tolerated: a fresh phone that never sees the seeded stores would create
+    # its own, and a balance split across duplicates is wrong in both halves.
+    assert {"store", "produce_type"} <= entities
     assert body["has_more"] is False
 
 

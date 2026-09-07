@@ -1,3 +1,4 @@
+import { byCode, byName, type StockInput } from "../domain/stores";
 import { db } from "./schema";
 import type {
   Death,
@@ -5,7 +6,12 @@ import type {
   ExpenseCategory,
   HealthRecord,
   Move,
+  ProduceType,
   Purchase,
+  StockCount,
+  StockIntake,
+  StockOuttake,
+  Store,
   Record_,
   Room,
   Sale,
@@ -193,4 +199,64 @@ export async function visitContents(
     health: health.filter((h) => !h.deleted_at),
     notes: notes.filter((n) => !n.deleted_at),
   };
+}
+
+
+/* ── SPEC 20 — produce stores ────────────────────────────────────────────── */
+
+/** SPEC 20.3 — the stores, in code order. */
+export async function liveStores(): Promise<Store[]> {
+  const stores = await db.stores.toArray();
+  return stores.filter((s) => !s.deleted_at).sort(byCode);
+}
+
+/**
+ * SPEC 20.4 — the produce types that can still be chosen.
+ *
+ * Archived types are excluded here rather than filtered per screen. A type with
+ * history is archived and never deleted (SPEC 20.14.5), so its name keeps
+ * appearing against the stock it explains while dropping out of every picker.
+ */
+export async function activeProduceTypes(): Promise<ProduceType[]> {
+  const types = await db.produceTypes.toArray();
+  return types.filter((p) => !p.deleted_at && p.is_active).sort(byName);
+}
+
+/** Every produce type including archived ones — what History and a balance
+ *  need, since stock can outlive the choice that created it. */
+export async function allProduceTypes(): Promise<ProduceType[]> {
+  const types = await db.produceTypes.toArray();
+  return types.filter((p) => !p.deleted_at).sort(byName);
+}
+
+export async function allIntakes(): Promise<StockIntake[]> {
+  const rows = await db.stockIntakes.toArray();
+  return rows.filter((r) => !r.deleted_at);
+}
+
+export async function allOuttakes(): Promise<StockOuttake[]> {
+  const rows = await db.stockOuttakes.toArray();
+  return rows.filter((r) => !r.deleted_at);
+}
+
+export async function allStockCounts(): Promise<StockCount[]> {
+  const rows = await db.stockCounts.toArray();
+  return rows.filter((r) => !r.deleted_at);
+}
+
+/**
+ * Everything the balance rule folds, in one call.
+ *
+ * The three event kinds are always read together — a balance is meaningless
+ * without all of them, since a stock count resets what the other two accumulate
+ * (SPEC 20.8). Fetching them as a unit is what stops a screen accidentally
+ * rendering a balance that ignores the last count.
+ */
+export async function allStockEvents(): Promise<StockInput> {
+  const [intakes, outtakes, counts] = await Promise.all([
+    allIntakes(),
+    allOuttakes(),
+    allStockCounts(),
+  ]);
+  return { intakes, outtakes, counts };
 }

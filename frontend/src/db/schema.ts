@@ -16,10 +16,15 @@ import type {
   HealthRecord,
   Move,
   OutboxOperation,
+  ProduceType,
   Purchase,
   Record_,
   Room,
   Sale,
+  StockCount,
+  StockIntake,
+  StockOuttake,
+  Store,
   SyncMeta,
   TreatmentSchedule,
   Vet,
@@ -50,6 +55,14 @@ export class RoomInventoryDB extends Dexie {
   treatmentSchedules!: Table<TreatmentSchedule, string>;
   vetVisits!: Table<VetVisit, string>;
   visitNotes!: Table<VisitNote, string>;
+  // SPEC 20 — the produce inventory. A separate set of tables on purpose: a
+  // Store is not a Room, and sacks in a Room would corrupt occupancy, room type
+  // and every alert that reads them (SPEC 20.2).
+  stores!: Table<Store, string>;
+  produceTypes!: Table<ProduceType, string>;
+  stockIntakes!: Table<StockIntake, string>;
+  stockOuttakes!: Table<StockOuttake, string>;
+  stockCounts!: Table<StockCount, string>;
   outbox!: Table<OutboxOperation, number>;
   meta!: Table<SyncMeta, string>;
 
@@ -259,6 +272,32 @@ export class RoomInventoryDB extends Dexie {
       // the phone.
       await tx.table("meta").put({ key: "poultry_split_count", value: movedIds.size });
     });
+
+    /**
+     * SPEC 20 — the produce inventory.
+     *
+     * New tables only; nothing existing changes shape, so there is no upgrade
+     * function. A Store is deliberately not a Room (SPEC 20.2).
+     *
+     * The three event tables are all read the same way: every event for one
+     * store and produce type, in date order, folded into a balance
+     * (`domain/stores.ts`). So each carries a compound index on exactly that
+     * pair, because the alternative is scanning a harvest's worth of rows on
+     * every render of the Stores screen (SPEC 6.13). `date` is indexed
+     * separately for the History tab and the Calendar.
+     *
+     * `is_active` on produce types is deliberately not indexed, for the reason
+     * `treatmentSchedules` gives: IndexedDB has no boolean key type, so a
+     * boolean index silently matches nothing. Archived types are filtered in
+     * memory over a table holding a handful of rows.
+     */
+    this.version(11).stores({
+      stores: "id, code, deleted_at",
+      produceTypes: "id, name, deleted_at",
+      stockIntakes: "id, [store_id+produce_type_id], store_id, produce_type_id, date",
+      stockOuttakes: "id, [store_id+produce_type_id], store_id, produce_type_id, date, reason",
+      stockCounts: "id, [store_id+produce_type_id], store_id, produce_type_id, date",
+    });
   }
 }
 
@@ -285,6 +324,9 @@ export const META = {
    *  which has to be told there is something to check. */
   poultrySplit: "poultry_split_count",
   poultrySplitSeen: "poultry_split_seen",
+  /** Whether the two stores and three produce types have been seeded locally
+   *  (SPEC 20.3, 20.4). */
+  storesSeeded: "stores_seeded",
 } as const;
 
 export async function getMeta<T>(key: string, fallback: T): Promise<T> {

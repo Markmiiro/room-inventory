@@ -10,9 +10,13 @@ import type {
   ExpenseScope,
   HealthRecord,
   HealthType,
+  IntakeSource,
   Move,
   MoveReason,
   OutboxOperation,
+  OuttakeReason,
+  PriceBasis,
+  ProduceType,
   Purchase,
   Record_,
   RecordKind,
@@ -21,6 +25,10 @@ import type {
   Sex,
   Source,
   Species,
+  StockCount,
+  StockIntake,
+  StockOuttake,
+  Store,
   TreatmentSchedule,
   VetVisit,
   VisitNote,
@@ -50,7 +58,12 @@ type Entity =
   | ExpenseCategory
   | TreatmentSchedule
   | VetVisit
-  | VisitNote;
+  | VisitNote
+  | Store
+  | ProduceType
+  | StockIntake
+  | StockOuttake
+  | StockCount;
 
 async function enqueue(
   tx: { outbox: typeof db.outbox },
@@ -1077,4 +1090,206 @@ export async function recordVisitNote(input: VisitNoteInput): Promise<VisitNote>
   });
 
   return note;
+}
+
+
+/* ── SPEC 20 — produce stores ────────────────────────────────────────────── */
+
+export interface IntakeInput {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  sacks?: number | null;
+  kg: number;
+  source: IntakeSource;
+  garden_name?: string | null;
+  seller?: string | null;
+  customer_id?: string | null;
+  cost?: number | null;
+  harvest_label?: string | null;
+  notes?: string | null;
+}
+
+/** The fields pushed for an intake. Listed once so the local row and the queued
+ *  operation cannot drift apart. */
+function intakeFields(intake: StockIntake): Record<string, unknown> {
+  return {
+    store_id: intake.store_id,
+    produce_type_id: intake.produce_type_id,
+    date: intake.date,
+    sacks: intake.sacks,
+    kg: intake.kg,
+    source: intake.source,
+    garden_name: intake.garden_name,
+    seller: intake.seller,
+    customer_id: intake.customer_id,
+    cost: intake.cost,
+    harvest_label: intake.harvest_label,
+    notes: intake.notes,
+  };
+}
+
+function buildIntake(input: IntakeInput, device_id: string, at: string): StockIntake {
+  const bought = input.source === "bought";
+  return {
+    id: newId(),
+    created_at: at,
+    updated_at: at,
+    device_id,
+    deleted_at: null,
+    store_id: input.store_id,
+    produce_type_id: input.produce_type_id,
+    date: input.date,
+    // Sacks are optional everywhere (SPEC 20.8). Zero is not the same as
+    // "not counted", so an absent value stays null rather than becoming 0.
+    sacks: input.sacks ?? null,
+    kg: input.kg,
+    source: input.source,
+    // Only the fields belonging to the chosen source survive, so a form that
+    // was filled in, switched and submitted cannot leave a seller on a garden
+    // delivery.
+    garden_name: bought ? null : input.garden_name?.trim() || null,
+    seller: bought ? input.seller?.trim() || null : null,
+    customer_id: bought ? (input.customer_id ?? null) : null,
+    // SPEC 20.9 — garden produce enters at zero cost, because growing it is
+    // already recorded as Expenses and counting it twice would understate the
+    // farm's profit.
+    cost: bought ? Math.round(input.cost ?? 0) : null,
+    harvest_label: input.harvest_label?.trim() || null,
+    notes: input.notes?.trim() || null,
+  };
+}
+
+/** SPEC 20.5 — produce arriving in a store. */
+export async function recordIntake(input: IntakeInput): Promise<StockIntake> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  return db.transaction("rw", db.stockIntakes, db.outbox, async () => {
+    const intake = buildIntake(input, device_id, at);
+    await db.stockIntakes.add(intake);
+    await enqueue(db, "insert", "stock_intake", intake, intakeFields(intake));
+    return intake;
+  });
+}
+
+export interface OuttakeInput {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  sacks?: number | null;
+  kg: number;
+  reason: OuttakeReason;
+  price_basis?: PriceBasis | null;
+  unit_price?: number | null;
+  total_price?: number | null;
+  customer_id?: string | null;
+  to_store_id?: string | null;
+  notes?: string | null;
+}
+
+function outtakeFields(outtake: StockOuttake): Record<string, unknown> {
+  return {
+    store_id: outtake.store_id,
+    produce_type_id: outtake.produce_type_id,
+    date: outtake.date,
+    sacks: outtake.sacks,
+    kg: outtake.kg,
+    reason: outtake.reason,
+    price_basis: outtake.price_basis,
+    unit_price: outtake.unit_price,
+    total_price: outtake.total_price,
+    customer_id: outtake.customer_id,
+    to_store_id: outtake.to_store_id,
+    notes: outtake.notes,
+  };
+}
+
+/**
+ * SPEC 20.6 — produce leaving a store.
+ *
+ * **A move writes both halves in one transaction.** An outtake with reason
+ * `moved` is mirrored as an intake in the destination store, carrying the same
+ * date and quantities, so a half-finished move cannot leave produce in neither
+ * store (SPEC 20.14.8). Dexie rolls the whole transaction back on any failure,
+ * which is what makes that guarantee structural rather than hopeful.
+ *
+ * **Nothing is blocked for being too large.** SPEC 20.14.1: the produce may
+ * physically be there when the ledger is wrong, so an overdraw is warned about
+ * on the form, written anyway, and clamped by the balance rule with an alert
+ * raised. Same rule as SPEC 6.7 for oversold groups.
+ */
+export async function recordOuttake(
+  input: OuttakeInput,
+): Promise<{ outtake: StockOuttake; mirrored: StockIntake | null }> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+  const sold = input.reason === "sold";
+  const moved = input.reason === "moved";
+
+  // SPEC 20.14.7 — a store cannot receive its own stock. The form does not
+  // offer it; this is the guard for a stale screen.
+  if (moved && input.to_store_id === input.store_id) {
+    throw new Error("A move needs a different destination store");
+  }
+  if (moved && !input.to_store_id) {
+    throw new Error("A move needs a destination store");
+  }
+
+  return db.transaction("rw", db.stockIntakes, db.stockOuttakes, db.outbox, async () => {
+    const outtake: StockOuttake = {
+      id: newId(),
+      created_at: at,
+      updated_at: at,
+      device_id,
+      deleted_at: null,
+      store_id: input.store_id,
+      produce_type_id: input.produce_type_id,
+      date: input.date,
+      sacks: input.sacks ?? null,
+      kg: input.kg,
+      reason: input.reason,
+      // Only a sale carries money, and only a move carries a destination. A
+      // reason switched on the form leaves nothing behind from the previous one.
+      price_basis: sold ? (input.price_basis ?? null) : null,
+      unit_price: sold && input.unit_price != null ? Math.round(input.unit_price) : null,
+      // SPEC 20.6 — the total is the stored truth. Every money figure reads it,
+      // so none of them depends on whether the deal was struck per kilogram or
+      // per sack.
+      total_price: sold && input.total_price != null ? Math.round(input.total_price) : null,
+      customer_id: sold ? (input.customer_id ?? null) : null,
+      to_store_id: moved ? (input.to_store_id ?? null) : null,
+      notes: input.notes?.trim() || null,
+    };
+
+    await db.stockOuttakes.add(outtake);
+    await enqueue(db, "insert", "stock_outtake", outtake, outtakeFields(outtake));
+
+    if (!moved) return { outtake, mirrored: null };
+
+    // The other half of the move. It is an ordinary intake — the produce really
+    // did arrive in the destination — sourced from the garden so it adds no
+    // cost: the farm did not buy anything, it carried sacks across the yard.
+    // Giving it a cost here would inflate the weighted average in the
+    // destination and count the same money twice (SPEC 20.9).
+    const mirrored = buildIntake(
+      {
+        store_id: outtake.to_store_id!,
+        produce_type_id: outtake.produce_type_id,
+        date: outtake.date,
+        sacks: outtake.sacks,
+        kg: outtake.kg,
+        source: "garden",
+        garden_name: null,
+        notes: outtake.notes,
+      },
+      device_id,
+      at,
+    );
+
+    await db.stockIntakes.add(mirrored);
+    await enqueue(db, "insert", "stock_intake", mirrored, intakeFields(mirrored));
+
+    return { outtake, mirrored };
+  });
 }

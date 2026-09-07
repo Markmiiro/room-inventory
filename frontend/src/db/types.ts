@@ -270,6 +270,123 @@ export interface VisitNote extends SyncFields {
   note: string;
 }
 
+/* ── SPEC 20 — stores and produce ───────────────────────────────────────────
+ *
+ * A second inventory beside the livestock one. It shares the sync engine, the
+ * design language and the money figures, and shares none of the data model:
+ * produce is kilograms and sacks, animals are head, and conflating them
+ * corrupts both. **A Store is not a Room** (SPEC 20.2) — rooms carry a capacity
+ * in head, a derived species type and animals inside them, and putting sacks in
+ * one would corrupt occupancy, room type and every alert that reads them.
+ */
+
+/** SPEC 20.3 — a state entity. Seeded with two at fixed ids, like the rooms. */
+export interface Store extends SyncFields {
+  code: string;
+  name: string;
+  /** Optional. Warns when exceeded, never blocks — the sacks are physically
+   *  there whether the app approves or not (SPEC 4.2's rule, restated). */
+  capacity_sacks: number | null;
+  notes: string | null;
+}
+
+/**
+ * SPEC 20.4 — a state entity, never a hardcoded enum.
+ *
+ * Seeded with Coffee, Maize and Beans and extended by the user. The species
+ * enum was the other choice and it cost a nine-file migration to undo (SPEC 18).
+ */
+export interface ProduceType extends SyncFields {
+  name: string;
+  is_active: boolean;
+  notes: string | null;
+}
+
+export type IntakeSource = "garden" | "bought";
+
+/** SPEC 20.5 — produce arriving in a store. An event: append-only. */
+export interface StockIntake extends SyncFields {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  /** Optional. When it is absent anywhere in a series the sack balance is
+   *  reported as partial rather than as though it were complete (SPEC 20.8). */
+  sacks: number | null;
+  /** Required on every event. Weight is what gets sold and what carries value. */
+  kg: number;
+  source: IntakeSource;
+  garden_name: string | null;
+  seller: string | null;
+  customer_id: string | null;
+  /** UGX. Required when bought, absent when from the garden — growing it was
+   *  already recorded as Expenses, and a second notional cost here would count
+   *  the same money twice (SPEC 20.9). */
+  cost: number | null;
+  /** SPEC 20.16 Q2 — a label, not a lot. It records which harvest a delivery
+   *  came from without giving it its own balance, because nothing can say which
+   *  physical kilograms later left a pooled store. */
+  harvest_label: string | null;
+  notes: string | null;
+}
+
+/** SPEC 20.6 — why produce left. Always required: an unexplained outtake is a
+ *  hole in exactly the records this feature exists to keep. */
+export type OuttakeReason =
+  | "sold"
+  | "home_use"
+  | "seed"
+  | "gift"
+  | "spoiled"
+  | "processing"
+  | "moved"
+  | "other";
+
+/** What was negotiated. Sales may be struck per kilogram or per sack, and the
+ *  two are never derived from one another (SPEC 20.8). */
+export type PriceBasis = "kg" | "sack";
+
+/** SPEC 20.6 — produce leaving a store. An event: append-only. */
+export interface StockOuttake extends SyncFields {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  sacks: number | null;
+  kg: number;
+  reason: OuttakeReason;
+  price_basis: PriceBasis | null;
+  /** What was typed, per `price_basis`. Display and audit only. */
+  unit_price: number | null;
+  /** UGX, and **the stored truth**. Every money figure reads this, so none of
+   *  them depends on how the deal was worded (SPEC 20.6). */
+  total_price: number | null;
+  customer_id: string | null;
+  /** Only when the reason is `moved`. The mirrored intake is written in the
+   *  same transaction, so a half-finished move cannot leave produce in neither
+   *  store (SPEC 20.14.8). */
+  to_store_id: string | null;
+  notes: string | null;
+}
+
+/**
+ * SPEC 20.7 — a physical count, reconciling the ledger against the store.
+ *
+ * Not decoration. Coffee loses weight as it dries and beans go to weevils, so
+ * without this the ledger drifts and the only way to correct it would be to
+ * invent a fake outtake — which would pollute the reasons that make the feature
+ * worth having.
+ *
+ * A count **resets** the running balance to its counted figure from its date
+ * onward, which is why it belongs to the balance rule rather than beside it.
+ */
+export interface StockCount extends SyncFields {
+  store_id: string;
+  produce_type_id: string;
+  date: string;
+  counted_sacks: number | null;
+  counted_kg: number;
+  notes: string | null;
+}
+
 export type EntityName =
   | "room"
   | "record"
@@ -284,7 +401,12 @@ export type EntityName =
   | "expense"
   | "treatment_schedule"
   | "vet_visit"
-  | "visit_note";
+  | "visit_note"
+  | "store"
+  | "produce_type"
+  | "stock_intake"
+  | "stock_outtake"
+  | "stock_count";
 
 /** One queued mutation. SPEC 5.1. */
 export interface OutboxOperation {

@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom";
 
-import { AnimalsIcon, CalendarIcon, MoneyIcon, MoreIcon, RoomsIcon } from "./Icons";
+import { AnimalsIcon, CalendarIcon, MoneyIcon, MoreIcon, RoomsIcon, StoresIcon } from "./Icons";
 
 /**
  * One navigation component, used everywhere: a bottom bar on mobile and a left
@@ -14,6 +14,14 @@ import { AnimalsIcon, CalendarIcon, MoneyIcon, MoreIcon, RoomsIcon } from "./Ico
 const DESTINATIONS = [
   { to: "/", label: "Rooms", Icon: RoomsIcon, end: true },
   { to: "/animals", label: "Animals", Icon: AnimalsIcon, end: false },
+  // SPEC 20.15 — a sixth destination, between Animals and Calendar.
+  //
+  // SPEC 11 says "five is the number", and that was written when the app held
+  // only livestock. During harvest this is a daily screen, and burying a daily
+  // screen under More costs more than a sixth tab does. Measured at 390px
+  // before it went in, because the species chips looked fine by estimate and
+  // were 100px too wide when checked.
+  { to: "/stores", label: "Stores", Icon: StoresIcon, end: false },
   { to: "/calendar", label: "Calendar", Icon: CalendarIcon, end: false },
   { to: "/money", label: "Money", Icon: MoneyIcon, end: false },
   { to: "/more", label: "More", Icon: MoreIcon, end: false },

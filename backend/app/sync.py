@@ -15,6 +15,7 @@ Three properties matter more than anything else here, and each is load-bearing:
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, text
@@ -31,10 +32,15 @@ from app.models import (
     ExpenseCategory,
     HealthRecord,
     Move,
+    ProduceType,
     Purchase,
     Record,
     Room,
     Sale,
+    StockCount,
+    StockIntake,
+    StockOuttake,
+    Store,
     TreatmentSchedule,
     Vet,
     VetVisit,
@@ -59,6 +65,13 @@ ENTITY_MODELS: dict[str, type] = {
     "treatment_schedule": TreatmentSchedule,
     "vet_visit": VetVisit,
     "visit_note": VisitNote,
+    # SPEC 20.13 — stores and produce types are state entities; intakes,
+    # outtakes and counts are events, append-only.
+    "store": Store,
+    "produce_type": ProduceType,
+    "stock_intake": StockIntake,
+    "stock_outtake": StockOuttake,
+    "stock_count": StockCount,
 }
 
 # Columns a client may write, per entity. Anything else in `data` is ignored
@@ -94,6 +107,20 @@ WRITABLE: dict[str, set[str]] = {
         "date", "vet_id", "status", "call_out_fee", "reason", "notes", "deleted_at",
     },
     "visit_note": {"visit_id", "record_id", "note"},
+    "store": {"code", "name", "capacity_sacks", "notes", "deleted_at"},
+    "produce_type": {"name", "is_active", "notes", "deleted_at"},
+    "stock_intake": {
+        "store_id", "produce_type_id", "date", "sacks", "kg", "source",
+        "garden_name", "seller", "customer_id", "cost", "harvest_label", "notes",
+    },
+    "stock_outtake": {
+        "store_id", "produce_type_id", "date", "sacks", "kg", "reason",
+        "price_basis", "unit_price", "total_price", "customer_id", "to_store_id",
+        "notes",
+    },
+    "stock_count": {
+        "store_id", "produce_type_id", "date", "counted_sacks", "counted_kg", "notes",
+    },
 }
 
 DATE_FIELDS = {"date", "date_of_birth", "arrival_date", "offspring_updated_at", "next_due"}
@@ -143,6 +170,13 @@ def row_to_dict(entity: str, row: Any) -> dict[str, Any]:
             value = value.astimezone(timezone.utc).isoformat()
         elif isinstance(value, date):
             value = value.isoformat()
+        elif isinstance(value, Decimal):
+            # Produce weights are Numeric so they do not drift at rest (SPEC
+            # 20.8). The client stores plain JS numbers, so they go out as
+            # floats rather than as the strings a Decimal would otherwise
+            # serialise to — a weight arriving as "620.000" would be compared
+            # and summed as text on the device.
+            value = float(value)
         out[column.name] = value
     out.pop("field_versions", None)
     return out
@@ -249,6 +283,15 @@ def _missing_required(entity: str, fields: dict[str, Any]) -> list[str]:
         "health_record": ["record_id", "type", "date"],
         "visit_note": ["visit_id", "record_id", "note"],
         "expense": ["amount", "category_id", "date", "applies_to"],
+        # SPEC 20.8 — `kg` is required on every stock event and `sacks` never
+        # is. Weight is what gets sold and what carries value; sacks are a
+        # physical check, and a missing one means "not counted" rather than
+        # zero.
+        "stock_intake": ["store_id", "produce_type_id", "date", "kg", "source"],
+        # SPEC 20.6 — a reason is always required. An unexplained outtake is a
+        # hole in exactly the records this feature exists to keep.
+        "stock_outtake": ["store_id", "produce_type_id", "date", "kg", "reason"],
+        "stock_count": ["store_id", "produce_type_id", "date", "counted_kg"],
     }.get(entity, [])
     return [f for f in required if fields.get(f) is None]
 

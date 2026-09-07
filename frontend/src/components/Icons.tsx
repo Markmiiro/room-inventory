@@ -146,3 +146,21 @@ export function SyncIcon({ className = base }: IconProps) {
     </svg>
   );
 }
+
+/**
+ * SPEC 20 — Stores.
+ *
+ * A stack of sacks, not a warehouse or a silo: the vocabulary bans those words
+ * (SPEC 20.2) and the icon should not smuggle them back in. It also has to read
+ * as clearly different from RoomsIcon at 24px, since the two sit side by side
+ * in the bar and both mean "a place things are kept".
+ */
+export function StoresIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+      <path d="M6 13h12a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Z" strokeLinejoin="round" />
+      <path d="M9 13V9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4" strokeLinejoin="round" />
+      <path d="M10 8V6a2 2 0 0 1 4 0v2" strokeLinecap="round" />
+    </svg>
+  );
+}

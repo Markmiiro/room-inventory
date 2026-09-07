@@ -4,7 +4,7 @@ import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { BackIcon, CloseIcon } from "./components/Icons";
 import { BottomNav, SideNav } from "./components/Nav";
 import { SyncIndicator } from "./components/SyncIndicator";
-import { seedRoomsIfEmpty, seedSchedulesIfEmpty } from "./db/seed";
+import { seedRoomsIfEmpty, seedSchedulesIfEmpty, seedStoresIfEmpty } from "./db/seed";
 import { AddPurchaseScreen } from "./screens/AddPurchase";
 import { AlertsScreen } from "./screens/Alerts";
 import { AnimalsScreen } from "./screens/Animals";
@@ -14,6 +14,10 @@ import { ContactsScreen } from "./screens/Contacts";
 import { HealthScreen } from "./screens/Health";
 import { LogDeathScreen } from "./screens/LogDeath";
 import { MoneyScreen } from "./screens/Money";
+import { AddStockScreen } from "./screens/AddStock";
+import { StoreDetailScreen } from "./screens/StoreDetail";
+import { StoresScreen } from "./screens/Stores";
+import { TakeOutStockScreen } from "./screens/TakeOutStock";
 import { MoreScreen } from "./screens/More";
 import { SellScreen } from "./screens/Sell";
 import { MoveScreen } from "./screens/Move";
@@ -46,13 +50,12 @@ function isFocusedRoute(pathname: string): boolean {
 
 function AppShell() {
   useEffect(() => {
-    // SPEC 6.10 — the ten rooms exist before anything else runs, with no
-    // network involved.
-    // SPEC 6.10 and 13.5 — both seeds run before sync starts, with no network
-    // involved, so a first open offline has its ten rooms and its eight starter
-    // schedules rather than an empty screen.
+    // SPEC 6.10, 13.5 and 20.3 — every seed runs before sync starts, with no
+    // network involved, so a first open offline has its ten rooms, its eight
+    // starter schedules and its two stores rather than an empty screen.
     void seedRoomsIfEmpty()
       .then(seedSchedulesIfEmpty)
+      .then(seedStoresIfEmpty)
       .then(() => {
         loadTokens();
         syncEngine.start();
@@ -83,6 +86,11 @@ function AppShell() {
             <Route path="/expenses" element={<ExpensesScreen />} />
             <Route path="/categories" element={<CategoriesScreen />} />
             <Route path="/money/*" element={<MoneyScreen />} />
+            {/* SPEC 20.11 */}
+            <Route path="/stores" element={<StoresScreen />} />
+            <Route path="/stores/:storeId" element={<StoreDetailScreen />} />
+            <Route path="/stock/in" element={<AddStockScreen />} />
+            <Route path="/stock/out" element={<TakeOutStockScreen />} />
             <Route path="/more" element={<MoreScreen />} />
             <Route path="/customers" element={<ContactsScreen kind="customer" />} />
             <Route path="/vets" element={<ContactsScreen kind="vet" />} />
@@ -117,6 +125,11 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/expenses/, "Expenses"],
   [/^\/categories/, "Manage categories"],
   [/^\/money/, "Money"],
+  // The detail pattern comes first: "/stores/abc" matches both.
+  [/^\/stores\/.+/, "Store"],
+  [/^\/stores/, "Stores"],
+  [/^\/stock\/in/, "Add stock"],
+  [/^\/stock\/out/, "Take out"],
   [/^\/more/, "More"],
   [/^\/customers/, "Customers"],
   [/^\/vets/, "Vets"],

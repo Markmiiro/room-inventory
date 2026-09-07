@@ -22,6 +22,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     Sequence,
     String,
     Text,
@@ -386,3 +387,141 @@ class SyncAnomaly(Base):
     detail: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------------
+# SPEC 20 — stores and produce
+#
+# A second inventory beside the livestock one. It shares the sync engine and the
+# money figures and shares none of the data model: produce is kilograms and
+# sacks, animals are head. **A Store is not a Room** (SPEC 20.2) — a room has a
+# capacity in head, a derived species type and animals in it, and sacks in one
+# would corrupt occupancy, room type and every alert that reads them.
+#
+# Weights are ``Numeric(12, 3)``, not floats. Kilograms are the only non-integer
+# quantity in this database, and a balance is a sum of many of them (SPEC 20.8);
+# binary floating point does not add decimals cleanly, and a stored weight that
+# drifts is a stored weight nobody can reconcile against a scale. Three decimal
+# places is a gram, well below what a farm scale resolves.
+# ---------------------------------------------------------------------------
+
+
+class Store(StateMixin, Base):
+    """SPEC 20.3 — a place produce is kept.
+
+    Seeded with two rows by migration 0010 at fixed IDs that must match
+    ``frontend/src/db/seed.ts``, for the reason the ten rooms do — and with
+    sharper consequences: two devices seeding offline would produce four stores,
+    and a balance split across a pair of duplicates is wrong in both halves.
+    """
+
+    __tablename__ = "stores"
+
+    code: Mapped[str] = mapped_column(String(8), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # SPEC 20.3 — optional, and warns rather than blocks when exceeded. The
+    # sacks are physically there whether the app approves or not.
+    capacity_sacks: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class ProduceType(StateMixin, Base):
+    """SPEC 20.4 — what is stored. A row, never an enum.
+
+    The species enum was the other choice and undoing it cost a nine-file
+    migration (SPEC 18). A farm that starts growing groundnuts should need a
+    form, not a release.
+    """
+
+    __tablename__ = "produce_types"
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class StockIntake(SyncMixin, Base):
+    """SPEC 20.5 — produce arriving in a store. An event: append-only."""
+
+    __tablename__ = "stock_intakes"
+
+    store_id: Mapped[str] = mapped_column(String(26), ForeignKey("stores.id"), nullable=False, index=True)
+    produce_type_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("produce_types.id"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Optional everywhere (SPEC 20.8). Null means "not counted", which is not
+    # the same as zero, and is what makes a sack balance report as partial.
+    sacks: Mapped[int | None] = mapped_column(Integer)
+    kg: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)
+    garden_name: Mapped[str | None] = mapped_column(String(120))
+    seller: Mapped[str | None] = mapped_column(String(120))
+    customer_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("customers.id"))
+    # UGX, whole shillings. Null for garden produce, which enters at zero cost
+    # because growing it is already recorded as an Expense — counting it again
+    # here would understate the farm's profit (SPEC 20.9).
+    cost: Mapped[int | None] = mapped_column(Integer)
+    # SPEC 20.16 Q2 — a label, not a lot. It records which harvest a delivery
+    # came from without giving it a balance of its own, because nothing can say
+    # which physical kilograms later left a pooled store.
+    harvest_label: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class StockOuttake(SyncMixin, Base):
+    """SPEC 20.6 — produce leaving a store. An event: append-only.
+
+    A move between stores is one outtake with ``reason='moved'`` and a
+    ``to_store_id``, mirrored as an intake in the destination. The client writes
+    both in one transaction so a half-finished move cannot leave produce in
+    neither store (SPEC 20.14.8); they arrive here as two ordinary events.
+    """
+
+    __tablename__ = "stock_outtakes"
+
+    store_id: Mapped[str] = mapped_column(String(26), ForeignKey("stores.id"), nullable=False, index=True)
+    produce_type_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("produce_types.id"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    sacks: Mapped[int | None] = mapped_column(Integer)
+    kg: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    # Always required. An unexplained outtake is a hole in exactly the records
+    # this feature exists to keep (SPEC 20.6).
+    reason: Mapped[str] = mapped_column(String(16), nullable=False)
+    # What was negotiated: per kilogram or per sack. Sales may be struck either
+    # way and neither quantity is derived from the other (SPEC 20.8).
+    price_basis: Mapped[str | None] = mapped_column(String(8))
+    unit_price: Mapped[int | None] = mapped_column(Integer)
+    # UGX, and the stored truth. Every money figure reads this, so none of them
+    # depends on how the deal was worded (SPEC 20.6).
+    total_price: Mapped[int | None] = mapped_column(Integer)
+    customer_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("customers.id"))
+    to_store_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("stores.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class StockCount(SyncMixin, Base):
+    """SPEC 20.7 — a physical count. An event: append-only.
+
+    Not decoration. Coffee loses weight as it dries and beans go to weevils, so
+    without this the ledger drifts from the store and the only way to correct it
+    would be to invent a fake outtake — polluting the very reasons that make the
+    feature worth having.
+
+    A count **resets** the running balance from its date onward rather than
+    adjusting it, which is why it belongs to the balance rule rather than beside
+    it (SPEC 20.8).
+    """
+
+    __tablename__ = "stock_counts"
+
+    store_id: Mapped[str] = mapped_column(String(26), ForeignKey("stores.id"), nullable=False, index=True)
+    produce_type_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("produce_types.id"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    counted_sacks: Mapped[int | None] = mapped_column(Integer)
+    counted_kg: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)

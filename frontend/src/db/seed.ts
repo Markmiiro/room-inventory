@@ -1,5 +1,5 @@
 import { db, META, getMeta, setMeta } from "./schema";
-import type { Room, TreatmentSchedule } from "./types";
+import type { ProduceType, Room, Store, TreatmentSchedule } from "./types";
 
 /**
  * SPEC 6.10 — first open, no data.
@@ -148,5 +148,86 @@ export async function seedSchedulesIfEmpty(): Promise<void> {
     const missing = schedules.filter((s) => !existing.has(s.id));
     if (missing.length > 0) await db.treatmentSchedules.bulkAdd(missing);
     await setMeta(META.schedulesSeeded, true);
+  });
+}
+
+
+/**
+ * SPEC 20.3 and 20.4 — the two stores and the three produce types.
+ *
+ * Same reasoning and the same mechanism as the ten rooms. The IDs are fixed
+ * constants and must stay identical to those in
+ * backend/alembic/versions/0010_stores_and_produce.py. Two devices that each
+ * seeded offline have to arrive at the same two stores, or the first sync would
+ * produce four — and four stores is worse than twenty rooms, because a balance
+ * would then be split across a pair of duplicates and neither would be right.
+ *
+ * Produce types are seeded as *rows*, never as an enum. The species enum was
+ * the other choice and undoing it cost a nine-file migration (SPEC 18); a farm
+ * that starts growing groundnuts should need a form, not a release.
+ */
+const STORE_ID_PREFIX = "0000000000000000000000T0";
+const PRODUCE_ID_PREFIX = "0000000000000000000000P0";
+
+const SEED_STORES = [
+  { code: "S1", name: "Upper store" },
+  { code: "S2", name: "Lower store" },
+];
+
+/** Alphabetical, which is also the order they are displayed in. */
+const SEED_PRODUCE_TYPES = ["Beans", "Coffee", "Maize"];
+
+export function seedStoreId(index: number): string {
+  return `${STORE_ID_PREFIX}${String(index).padStart(2, "0")}`;
+}
+
+export function seedProduceTypeId(index: number): string {
+  return `${PRODUCE_ID_PREFIX}${String(index).padStart(2, "0")}`;
+}
+
+export async function seedStoresIfEmpty(): Promise<void> {
+  if (await getMeta(META.storesSeeded, false)) return;
+
+  const at = new Date(0).toISOString();
+  const base = { created_at: at, updated_at: at, device_id: "seed", deleted_at: null };
+
+  const stores: Store[] = SEED_STORES.map((store, i) => ({
+    id: seedStoreId(i + 1),
+    // Backdated for the same reason the rooms are: a seeded name must lose to
+    // any real edit, whether it was made here or on another device.
+    ...base,
+    code: store.code,
+    name: store.name,
+    // SPEC 20.3 — optional, and unset until the farm says otherwise. A capacity
+    // invented here would start warning about a limit nobody chose.
+    capacity_sacks: null,
+    notes: null,
+  }));
+
+  const produceTypes: ProduceType[] = SEED_PRODUCE_TYPES.map((name, i) => ({
+    id: seedProduceTypeId(i + 1),
+    ...base,
+    name,
+    is_active: true,
+    notes: null,
+  }));
+
+  await db.transaction("rw", db.stores, db.produceTypes, db.meta, async () => {
+    // Only the rows this device has never seen, exactly as the rooms and
+    // schedules do: a pull that already delivered the real stores — including a
+    // rename or an archived produce type — must not be clobbered by the seed.
+    const haveStores = new Set(
+      (await db.stores.bulkGet(stores.map((s) => s.id))).filter(Boolean).map((s) => s!.id),
+    );
+    const missingStores = stores.filter((s) => !haveStores.has(s.id));
+    if (missingStores.length > 0) await db.stores.bulkAdd(missingStores);
+
+    const haveTypes = new Set(
+      (await db.produceTypes.bulkGet(produceTypes.map((p) => p.id))).filter(Boolean).map((p) => p!.id),
+    );
+    const missingTypes = produceTypes.filter((p) => !haveTypes.has(p.id));
+    if (missingTypes.length > 0) await db.produceTypes.bulkAdd(missingTypes);
+
+    await setMeta(META.storesSeeded, true);
   });
 }

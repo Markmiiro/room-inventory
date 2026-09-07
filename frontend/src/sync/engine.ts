@@ -9,10 +9,15 @@ import type {
   HealthRecord,
   Move,
   OutboxOperation,
+  ProduceType,
   Purchase,
   Record_,
   Room,
   Sale,
+  StockCount,
+  StockIntake,
+  StockOuttake,
+  Store,
   TreatmentSchedule,
   Vet,
   VetVisit,
@@ -358,6 +363,30 @@ export async function applyServerRow(
     case "visit_note": {
       // An event: a pulled note can only ever be new.
       await db.visitNotes.put(data as unknown as VisitNote);
+      return;
+    }
+    // SPEC 20.13 — stores and produce types are state entities with per-field
+    // last-write-wins; intakes, outtakes and counts are events, append-only.
+    case "store": {
+      if (queued > 0) return;
+      await db.stores.put(data as unknown as Store);
+      return;
+    }
+    case "produce_type": {
+      if (queued > 0) return;
+      await db.produceTypes.put(data as unknown as ProduceType);
+      return;
+    }
+    case "stock_intake": {
+      await db.stockIntakes.put(data as unknown as StockIntake);
+      return;
+    }
+    case "stock_outtake": {
+      await db.stockOuttakes.put(data as unknown as StockOuttake);
+      return;
+    }
+    case "stock_count": {
+      await db.stockCounts.put(data as unknown as StockCount);
       return;
     }
     default:

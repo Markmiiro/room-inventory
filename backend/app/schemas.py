@@ -10,9 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field
 # `vet_visit` is here rather than in EVENT_ENTITIES despite SPEC 16 calling it
 # an event: a visit is marked completed and annotated after it is created, which
 # an append-only row cannot express. See the docstring on models.VetVisit.
-STATE_ENTITIES = {"room", "record", "treatment_schedule", "vet_visit"}
+STATE_ENTITIES = {"room", "record", "treatment_schedule", "vet_visit", "store", "produce_type"}
 EVENT_ENTITIES = {
     "move", "sale", "death", "purchase", "health_record", "expense", "visit_note",
+    # SPEC 20.13. Intakes, outtakes and counts are append-only: the balance is
+    # derived by folding them (SPEC 20.8), so an edited event would silently
+    # restate a balance rather than correct it. A mistake is corrected by adding
+    # a stock count, which is exactly what one is for.
+    "stock_intake", "stock_outtake", "stock_count",
 }
 SYNCED_ENTITIES = STATE_ENTITIES | EVENT_ENTITIES
 
@@ -20,6 +25,7 @@ EntityName = Literal[
     "room", "record", "move", "sale", "death", "purchase", "health_record",
     "expense_category", "customer", "vet", "expense", "treatment_schedule",
     "vet_visit", "visit_note",
+    "store", "produce_type", "stock_intake", "stock_outtake", "stock_count",
 ]
 
 
