@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { StockCount, StockIntake, StockOuttake } from "../db/types";
-import { averageCostPerKg, balanceFor, balancesAsAt } from "./stores";
+import { averageCostPerKg, balanceFor, balancesAsAt, sackWeightWarning } from "./stores";
 
 /**
  * SPEC 20.8 — the derived balance.
@@ -408,5 +408,74 @@ describe("what produce is worth", () => {
       intake({ id: "a", store_id: S2, source: "bought", kg: 100, cost: 900_000 }),
     ]);
     expect(cost).toBeNull();
+  });
+});
+
+
+/**
+ * SPEC 20.17 — the typical sack weight, and the one thing it is for.
+ *
+ * It exists to catch a typo: 600 kg typed where 60 was meant. Two properties
+ * matter more than the threshold. It **warns and never blocks**, so no caller
+ * may gate on it. And **nothing is ever computed from it** — this function
+ * returns words or nothing, never a quantity, because SPEC 20.8 forbids
+ * deriving sacks and kilograms from one another.
+ */
+describe("the sack weight warning", () => {
+  it("warns when the weight per sack is wildly high", () => {
+    // The case it exists for: 600 typed where 60 was meant.
+    const warning = sackWeightWarning("Coffee", 60, 1, 600);
+    expect(warning).toContain("600");
+    expect(warning).toContain("60");
+    expect(warning).toContain("Coffee");
+  });
+
+  it("warns when the weight per sack is wildly low", () => {
+    expect(sackWeightWarning("Maize", 100, 10, 60)).not.toBeNull();
+  });
+
+  it("says nothing about an ordinary load", () => {
+    expect(sackWeightWarning("Coffee", 60, 10, 620)).toBeNull();
+  });
+
+  /** Deliberately wide. A warning that fires on a normal load is one people
+   *  learn to scroll past, and then it catches nothing. */
+  it("tolerates a sack half again as heavy, or half as heavy", () => {
+    expect(sackWeightWarning("Coffee", 60, 1, 90)).toBeNull();
+    expect(sackWeightWarning("Coffee", 60, 1, 30)).toBeNull();
+    expect(sackWeightWarning("Coffee", 60, 1, 91)).not.toBeNull();
+    expect(sackWeightWarning("Coffee", 60, 1, 29)).not.toBeNull();
+  });
+
+  /**
+   * SPEC 20.17 — with nothing set, no warning appears and everything else
+   * works normally. This is the shipped state, so it is the important case.
+   */
+  it("says nothing when the farm has not set a typical weight", () => {
+    expect(sackWeightWarning("Coffee", null, 1, 600)).toBeNull();
+  });
+
+  it("says nothing when sacks were not recorded", () => {
+    // There is no weight per sack to check, and a warning with a blank in it is
+    // worse than none.
+    expect(sackWeightWarning("Coffee", 60, null, 600)).toBeNull();
+  });
+
+  it("says nothing when either figure is zero", () => {
+    expect(sackWeightWarning("Coffee", 60, 0, 600)).toBeNull();
+    expect(sackWeightWarning("Coffee", 60, 10, 0)).toBeNull();
+    expect(sackWeightWarning("Coffee", 0, 10, 600)).toBeNull();
+  });
+
+  /**
+   * The guarantee, asserted as a type-level fact rather than left to review: it
+   * returns a message or nothing. There is no number here for a caller to
+   * mistake for a measurement.
+   */
+  it("returns words or nothing, never a quantity", () => {
+    const warned = sackWeightWarning("Coffee", 60, 1, 600);
+    const quiet = sackWeightWarning("Coffee", 60, 10, 620);
+    expect(typeof warned).toBe("string");
+    expect(quiet).toBeNull();
   });
 });

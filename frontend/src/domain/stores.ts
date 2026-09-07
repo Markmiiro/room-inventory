@@ -267,3 +267,49 @@ export function byCode(a: Store, b: Store): number {
 export function byName(a: ProduceType, b: ProduceType): number {
   return a.name.localeCompare(b.name);
 }
+
+
+/**
+ * SPEC 20.17 — does this entry look like a typo?
+ *
+ * The one use of `typical_sack_kg`. When an entry gives **both** sacks and
+ * kilograms, the implied weight per sack is compared against what the farm says
+ * a sack of this produce usually weighs. More than half away in either
+ * direction and the form says so, naming both numbers.
+ *
+ * It **warns and never blocks**. The farm knows its own sacks, and a half-full
+ * one is a real thing; refusing the entry would push someone into typing a
+ * different number to get past the form, which is worse than a wrong number
+ * they can see. Every caller keeps its confirm button enabled.
+ *
+ * **Nothing is computed from the typical weight.** This returns a message or
+ * nothing — it never returns a quantity, and no caller may use it to fill in a
+ * missing figure. SPEC 20.8: sacks and kilograms are tracked independently and
+ * neither is derived from the other.
+ *
+ * Silent when the farm has not set a typical weight, when sacks were not
+ * recorded, or when either figure is zero — in each case there is nothing to
+ * compare, and a warning with a blank in it is worse than none.
+ */
+export function sackWeightWarning(
+  produceName: string,
+  typicalSackKg: number | null,
+  sacks: number | null,
+  kg: number,
+): string | null {
+  if (typicalSackKg === null || typicalSackKg <= 0) return null;
+  if (sacks === null || sacks <= 0) return null;
+  if (!Number.isFinite(kg) || kg <= 0) return null;
+
+  const perSack = kg / sacks;
+  // Half again, or half as much. Deliberately wide: sacks vary, and a warning
+  // that fires on an ordinary load is one people learn to ignore.
+  const ratio = perSack / typicalSackKg;
+  if (ratio >= 0.5 && ratio <= 1.5) return null;
+
+  return (
+    `That is about ${roundKg(perSack).toLocaleString("en-UG")} kg per sack. ` +
+    `${produceName} is usually around ${roundKg(typicalSackKg).toLocaleString("en-UG")} kg. ` +
+    "Is that right?"
+  );
+}

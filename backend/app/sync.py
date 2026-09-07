@@ -108,7 +108,7 @@ WRITABLE: dict[str, set[str]] = {
     },
     "visit_note": {"visit_id", "record_id", "note"},
     "store": {"code", "name", "capacity_sacks", "notes", "deleted_at"},
-    "produce_type": {"name", "is_active", "notes", "deleted_at"},
+    "produce_type": {"name", "is_active", "typical_sack_kg", "notes", "deleted_at"},
     "stock_intake": {
         "store_id", "produce_type_id", "date", "sacks", "kg", "source",
         "garden_name", "seller", "customer_id", "cost", "harvest_label", "notes",

@@ -1293,3 +1293,58 @@ export async function recordOuttake(
     return { outtake, mirrored };
   });
 }
+
+
+/**
+ * SPEC 20.4 and 20.17 — managing produce types.
+ *
+ * A state entity, so only the fields that genuinely changed are pushed: the
+ * server merges per field, and asserting an untouched value would let this
+ * device beat another device's real edit to it (SPEC 5.4).
+ */
+export async function createProduceType(name: string): Promise<ProduceType> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+  const produceType: ProduceType = {
+    id: newId(),
+    created_at: at,
+    updated_at: at,
+    device_id,
+    deleted_at: null,
+    name: name.trim(),
+    is_active: true,
+    // Empty until the farm says otherwise (SPEC 20.17).
+    typical_sack_kg: null,
+    notes: null,
+  };
+
+  await db.transaction("rw", db.produceTypes, db.outbox, async () => {
+    await db.produceTypes.add(produceType);
+    await enqueue(db, "upsert", "produce_type", produceType, {
+      name: produceType.name,
+      is_active: produceType.is_active,
+      typical_sack_kg: produceType.typical_sack_kg,
+      notes: produceType.notes,
+    });
+  });
+  return produceType;
+}
+
+export async function updateProduceType(
+  id: string,
+  changes: Partial<Pick<ProduceType, "name" | "is_active" | "typical_sack_kg" | "notes">>,
+): Promise<void> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+
+  await db.transaction("rw", db.produceTypes, db.outbox, async () => {
+    const existing = await db.produceTypes.get(id);
+    if (!existing) throw new Error(`No produce type ${id}`);
+    const real = changedOnly(existing, changes);
+    if (Object.keys(real).length === 0) return;
+
+    const updated: ProduceType = { ...existing, ...real, updated_at: at, device_id };
+    await db.produceTypes.put(updated);
+    await enqueue(db, "upsert", "produce_type", updated, real as Record<string, unknown>);
+  });
+}

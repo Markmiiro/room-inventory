@@ -437,6 +437,11 @@ class ProduceType(StateMixin, Base):
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # SPEC 20.17 — what a sack of this usually weighs, set by the farm and
+    # shipped empty. Used only to warn about a typo; nothing is ever computed
+    # from it, because SPEC 20.8 forbids deriving sacks and kilograms from one
+    # another.
+    typical_sack_kg: Mapped[float | None] = mapped_column(Numeric(12, 3))
     notes: Mapped[str | None] = mapped_column(Text)
 
 

@@ -5,6 +5,7 @@ import { todayInEAT } from "../db/ids";
 import { recordIntake } from "../db/mutations";
 import { activeProduceTypes, liveStores } from "../db/queries";
 import type { IntakeSource, ProduceType, Store } from "../db/types";
+import { sackWeightWarning } from "../domain/stores";
 import { useLiveQuery } from "../sync/useSync";
 import { Chip, Field, NumberField, Picker } from "./stockControls";
 
@@ -45,6 +46,21 @@ export function AddStockScreen() {
   const store = storeId || stores[0]?.id || "";
   const produce = typeId || types[0]?.id || "";
   const weight = Number(kg);
+
+  /**
+   * SPEC 20.17 — a typo check, not a rule. It warns and the button stays
+   * enabled: the farm knows its own sacks, and a half-full one is a real thing.
+   * Nothing is computed from the typical weight.
+   */
+  const chosenType = types.find((t) => t.id === produce);
+  const sackWarning = chosenType
+    ? sackWeightWarning(
+        chosenType.name,
+        chosenType.typical_sack_kg,
+        sacks.trim() ? Number(sacks) : null,
+        weight,
+      )
+    : null;
 
   const problem = useMemo(() => {
     if (!store || !produce) return "Choose a store and a produce type.";
@@ -122,6 +138,10 @@ export function AddStockScreen() {
           hint="Optional"
         />
       </div>
+
+      {sackWarning && (
+        <p className="card p-4 mt-3 text-body-md text-alert-text">{sackWarning}</p>
+      )}
 
       <fieldset className="mt-4">
         <legend className="data-label mb-2">Where it came from</legend>

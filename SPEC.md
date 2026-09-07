@@ -1466,7 +1466,47 @@ it entered at zero cost (20.9) because growing it was already recorded as
 Expenses, so the whole sale price lands with no matching cost. That is correct
 rather than double-counted, and **the screen must say so in words.**
 
-**4. Typical sack weights — still open.** Needed only to flag an entry that
-looks like a typo, never to compute from (20.8). Until the farm's real figures
-are supplied, no weight-based typo warning ships; its absence is silent and
-nothing else depends on it.
+**4. Typical sack weights — set in the app, not hardcoded.** The farm enters
+them per produce type and they ship empty. See 20.17.
+
+### 20.17 Typical sack weight
+
+`ProduceType` carries an optional `typical_sack_kg`, edited on **Manage produce
+types**. It ships empty for every type.
+
+**The farm sets it, and the app never guesses it.** A seeded default would be a
+number nobody chose, quietly deciding what counts as a typo on somebody else's
+scales — and a wrong one is worse than none, because it starts questioning
+entries that are correct.
+
+**It is used for exactly one thing.** When an intake or outtake records **both**
+sacks and kilograms, and the implied weight per sack is more than half away from
+the typical figure in either direction, the form says so in words, naming both
+numbers:
+
+> That is about 600 kg per sack. Coffee is usually around 60 kg. Is that right?
+
+The threshold is deliberately wide. Sacks vary, a half-full one is a real thing,
+and a warning that fires on an ordinary load is one people learn to scroll past —
+at which point it catches nothing.
+
+**It warns and never blocks.** The confirm button stays enabled. The farm knows
+its own sacks better than the app does, and refusing the entry would push
+someone into typing a different number to get past the form, which is worse than
+a wrong number they can see.
+
+**Nothing is ever computed from it.** `sackWeightWarning` returns a message or
+nothing — never a quantity. The app must never multiply sacks by a typical
+weight to fill in a missing kilogram figure, anywhere. 20.8 is the reason: sacks
+and kilograms are tracked independently and neither is derived from the other,
+because a sack of coffee and a sack of maize weigh different amounts and two
+sacks of the same coffee are not identical. A figure invented that way would be
+indistinguishable on screen from one somebody weighed.
+
+**With nothing set, nothing changes.** No warning appears, and every other part
+of the store screens works exactly as it does now — which is the shipped state,
+so it is the case that matters most.
+
+Manage produce types explains all of this above the field. An unexplained
+optional number on a settings screen is one people either ignore or fill in
+wrongly, and both outcomes are worse than the field not being there.

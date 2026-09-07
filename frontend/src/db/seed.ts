@@ -209,6 +209,9 @@ export async function seedStoresIfEmpty(): Promise<void> {
     ...base,
     name,
     is_active: true,
+    // SPEC 20.17 — shipped empty. A guessed weight would be a number the farm
+    // never chose, quietly deciding what counts as a typo on their scales.
+    typical_sack_kg: null,
     notes: null,
   }));
 

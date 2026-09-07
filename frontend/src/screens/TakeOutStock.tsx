@@ -6,7 +6,7 @@ import { recordOuttake } from "../db/mutations";
 import { activeProduceTypes, allStockEvents, liveStores } from "../db/queries";
 import type { OuttakeReason, PriceBasis, ProduceType, Store } from "../db/types";
 import { formatUGX } from "../domain/format";
-import { balanceFor, balancesAsAt, type StockInput } from "../domain/stores";
+import { balanceFor, balancesAsAt, sackWeightWarning, type StockInput } from "../domain/stores";
 import { useLiveQuery } from "../sync/useSync";
 import { Chip, Field, NumberField, Picker } from "./stockControls";
 import { Quantity } from "./Stores";
@@ -117,6 +117,15 @@ export function TakeOutStockScreen() {
    */
   const overdraw = weight > balance.kg && Number.isFinite(weight) && weight > 0;
 
+  /**
+   * SPEC 20.17 — the same typo check as Add stock, from the same rule. It warns
+   * and the button stays enabled; nothing is computed from the typical weight.
+   */
+  const chosenType = types.find((t) => t.id === produce);
+  const sackWarning = chosenType
+    ? sackWeightWarning(chosenType.name, chosenType.typical_sack_kg, sackCount, weight)
+    : null;
+
   async function save() {
     if (problem || saving) return;
     setSaving(true);
@@ -192,6 +201,10 @@ export function TakeOutStockScreen() {
           the produce may be there when the records are wrong — and the balance will stop at zero
           until a stock count sets it straight.
         </p>
+      )}
+
+      {sackWarning && (
+        <p className="card p-4 mt-3 text-body-md text-alert-text">{sackWarning}</p>
       )}
 
       <fieldset className="mt-4">

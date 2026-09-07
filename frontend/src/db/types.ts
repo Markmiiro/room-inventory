@@ -299,6 +299,23 @@ export interface Store extends SyncFields {
 export interface ProduceType extends SyncFields {
   name: string;
   is_active: boolean;
+  /**
+   * What a sack of this produce usually weighs, if the farm has said.
+   *
+   * **Used for exactly one thing: warning about a typo.** When an entry gives
+   * both sacks and kilograms and the implied weight per sack is wildly away
+   * from this, the form says so in words and carries on (SPEC 20.17).
+   *
+   * **Nothing is ever computed from it.** The app must never multiply sacks by
+   * this to fill in a missing weight — SPEC 20.8 is explicit that sacks and
+   * kilograms are tracked independently and neither is derived from the other.
+   * A sack of coffee and a sack of maize weigh different amounts, and two sacks
+   * of the same coffee are not identical.
+   *
+   * Ships empty. A guessed default would be a number the farm never chose,
+   * quietly deciding what counts as a typo on their scales.
+   */
+  typical_sack_kg: number | null;
   notes: string | null;
 }
 

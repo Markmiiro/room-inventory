@@ -230,3 +230,47 @@ def test_stock_events_advance_the_shared_seq(client):
     seqs = [c["seq"] for c in body["changes"]]
     assert seqs == sorted(seqs)
     assert any(c["entity"] == "stock_intake" for c in body["changes"])
+
+
+def test_a_typical_sack_weight_is_optional_and_ships_empty(client, db):
+    """SPEC 20.17 — set by the farm, never guessed.
+
+    A seeded number would be one the farm never chose, quietly deciding what
+    counts as a typo on their scales. With the column empty no warning fires and
+    everything else works normally.
+    """
+    assert db.get(ProduceType, PRODUCE_COFFEE).typical_sack_kg is None
+
+
+def test_a_typical_sack_weight_round_trips(client, db):
+    push(
+        client,
+        "device-a",
+        [{
+            "op": "upsert",
+            "entity": "produce_type",
+            "id": PRODUCE_COFFEE,
+            "data": {"typical_sack_kg": 60},
+            "updated_at": ts(),
+        }],
+    )
+
+    row = db.get(ProduceType, PRODUCE_COFFEE)
+    assert row.typical_sack_kg == Decimal("60.000")
+    # Setting it must not disturb the name it was seeded with (SPEC 5.4).
+    assert row.name == "Coffee"
+
+
+def test_a_typical_sack_weight_can_be_cleared(client, db):
+    """The farm may decide it was wrong. Clearing it stops the warning rather
+    than leaving a stale figure questioning correct entries."""
+    push(client, "device-a", [{
+        "op": "upsert", "entity": "produce_type", "id": PRODUCE_COFFEE,
+        "data": {"typical_sack_kg": 60}, "updated_at": ts(0),
+    }])
+    push(client, "device-a", [{
+        "op": "upsert", "entity": "produce_type", "id": PRODUCE_COFFEE,
+        "data": {"typical_sack_kg": None}, "updated_at": ts(10),
+    }])
+
+    assert db.get(ProduceType, PRODUCE_COFFEE).typical_sack_kg is None

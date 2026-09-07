@@ -16,6 +16,7 @@ import { LogDeathScreen } from "./screens/LogDeath";
 import { MoneyScreen } from "./screens/Money";
 import { AddStockScreen } from "./screens/AddStock";
 import { StoreDetailScreen } from "./screens/StoreDetail";
+import { ProduceTypesScreen } from "./screens/ProduceTypes";
 import { StoresScreen } from "./screens/Stores";
 import { TakeOutStockScreen } from "./screens/TakeOutStock";
 import { MoreScreen } from "./screens/More";
@@ -91,6 +92,7 @@ function AppShell() {
             <Route path="/stores/:storeId" element={<StoreDetailScreen />} />
             <Route path="/stock/in" element={<AddStockScreen />} />
             <Route path="/stock/out" element={<TakeOutStockScreen />} />
+            <Route path="/produce-types" element={<ProduceTypesScreen />} />
             <Route path="/more" element={<MoreScreen />} />
             <Route path="/customers" element={<ContactsScreen kind="customer" />} />
             <Route path="/vets" element={<ContactsScreen kind="vet" />} />
@@ -130,6 +132,7 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/stores/, "Stores"],
   [/^\/stock\/in/, "Add stock"],
   [/^\/stock\/out/, "Take out"],
+  [/^\/produce-types/, "Manage produce types"],
   [/^\/more/, "More"],
   [/^\/customers/, "Customers"],
   [/^\/vets/, "Vets"],

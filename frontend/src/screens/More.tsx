@@ -7,6 +7,7 @@ import {
   ChevronIcon,
   MoneyIcon,
   RoomsIcon,
+  StoresIcon,
   WarningIcon,
 } from "../components/Icons";
 import {
@@ -83,6 +84,13 @@ export function MoreScreen() {
           Icon={MoneyIcon}
           title="Expense categories"
           detail="Your own labels — the app ships with none"
+        />
+        {/* SPEC 20.11 */}
+        <Row
+          to="/produce-types"
+          Icon={StoresIcon}
+          title="Manage produce types"
+          detail="What the stores hold, and a typical sack weight"
         />
       </Group>
 
