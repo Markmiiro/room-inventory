@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { todayInEAT } from "../db/ids";
 import {
@@ -29,12 +29,11 @@ import type {
 import { departuresFrom, expenseShareFor } from "../domain/allocation";
 import { callOutFeeFor, totalCallOutFees } from "../domain/visits";
 import { formatUGX, formatUGXShort } from "../domain/format";
+import { farmMoney } from "../domain/money";
+import { type Period, periodFrom, periodLabel, rowsInPeriod } from "../domain/period";
+import { PeriodSelector } from "../components/PeriodSelector";
 import { useLiveQuery } from "../sync/useSync";
-
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { AnalyticsScreen } from "./Analytics";
 
 /**
  * Money summary — SPEC 4.5.
@@ -50,10 +49,81 @@ const MONTHS = [
  * 4.5 says to say so plainly rather than hide it, so the difference is shown as
  * its own line instead of being spread around until the columns tie out.
  */
+/**
+ * Money — two tabs over one period (SPEC 19.4).
+ *
+ * Analytics is not a sixth destination. SPEC 11 fixes five and says "Five is
+ * the number", and Analytics belongs with Money on the merits rather than by
+ * elimination: both read sales and purchases, both are asked over a period, and
+ * the period selector is the same control. Two screens each carrying their own
+ * copy of it is how they end up quietly reporting different windows under an
+ * identical label.
+ *
+ * The period lives here, above both tabs, so switching tabs keeps it. Someone
+ * who has set five years to look at the census does not want the money table to
+ * silently answer for twelve months instead.
+ *
+ * The tab is in the URL, so the back button leaves Analytics rather than the
+ * whole screen, and a bookmark or a reload lands where it was. `/money/*` is a
+ * single route, which is what keeps this component mounted — and therefore the
+ * chosen period alive — as the two tabs swap underneath it.
+ */
 export function MoneyScreen() {
   const today = todayInEAT();
   const [months, setMonths] = useState(12);
+  const location = useLocation();
+  const navigate = useNavigate();
 
+  const period = useMemo(() => periodFrom(today, months), [today, months]);
+  const onAnalytics = location.pathname.startsWith("/money/analytics");
+
+  return (
+    <div className="pb-8">
+      <div className="flex gap-2" role="tablist" aria-label="Money">
+        <Tab active={!onAnalytics} onClick={() => navigate("/money")}>
+          Summary
+        </Tab>
+        <Tab active={onAnalytics} onClick={() => navigate("/money/analytics")}>
+          Analytics
+        </Tab>
+      </div>
+
+      <div className="mt-3">
+        <PeriodSelector months={months} onChange={setMonths} />
+      </div>
+
+      {onAnalytics ? <AnalyticsScreen period={period} /> : <SummaryTab period={period} />}
+    </div>
+  );
+}
+
+function Tab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`flex-1 min-h-touch md:min-h-touch-desktop rounded-lg border text-body-md font-semibold ${
+        active
+          ? "bg-primary-container text-white border-primary-container"
+          : "bg-card text-text border-border"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SummaryTab({ period }: { period: Period }) {
   const records = useLiveQuery(() => db.records.toArray(), [], [] as Record_[]);
   const moves = useLiveQuery(allMoves, [], [] as Move[]);
   const purchases = useLiveQuery(allPurchases, [], [] as Purchase[]);
@@ -66,21 +136,19 @@ export function MoneyScreen() {
   const visitNotes = useLiveQuery(allVisitNotes, [], [] as VisitNote[]);
   const categories = useLiveQuery(liveCategories, [], [] as ExpenseCategory[]);
 
-  const since = useMemo(() => {
-    const [y, m] = today.split("-").map(Number);
-    return new Date(Date.UTC(y ?? 2026, (m ?? 1) - 1 - (months - 1), 1)).toISOString().slice(0, 10);
-  }, [today, months]);
+  const inPeriod = <T extends { date: string }>(rows: T[]) => rowsInPeriod(period, rows);
 
-  const inPeriod = <T extends { date: string }>(rows: T[]) =>
-    rows.filter((row) => row.date >= since && row.date <= today);
+  // SPEC 4.5, shared with the Analytics tab so the two cannot disagree about
+  // what a period contains.
+  const farm = farmMoney(period, { sales, purchases, expenses });
+  const salesTotal = farm.sales;
+  const purchaseTotal = farm.purchases;
+  const expenseTotal = farm.expenses;
+  const farmProfit = farm.profit;
 
-  const salesTotal = inPeriod(sales).reduce((sum, s) => sum + s.price, 0);
-  const purchaseTotal = inPeriod(purchases).reduce((sum, p) => sum + p.price, 0);
-  const expenseTotal = inPeriod(expenses).reduce((sum, e) => sum + e.amount, 0);
   const healthTotal = inPeriod(health).reduce((sum, h) => sum + (h.cost ?? 0), 0);
   // Only completed visits: a planned one is a journey nobody has made yet.
   const calloutTotal = totalCallOutFees(inPeriod(visits));
-  const farmProfit = salesTotal - purchaseTotal - expenseTotal;
 
   // SPEC 4.4 — the departure dates are what stop a sold animal carrying a full
   // month of feed it was not there for.
@@ -90,8 +158,8 @@ export function MoneyScreen() {
   );
 
   const perRecord = useMemo(() => {
-    const periodExpenses = expenses.filter((e) => e.date >= since && e.date <= today);
-    const periodVisits = visits.filter((v) => v.date >= since && v.date <= today);
+    const periodExpenses = rowsInPeriod(period, expenses);
+    const periodVisits = rowsInPeriod(period, visits);
     return records
       .filter((r) => !r.deleted_at)
       .map((record) => {
@@ -131,8 +199,7 @@ export function MoneyScreen() {
     visitNotes,
     moves,
     departures,
-    since,
-    today,
+    period,
   ]);
 
   const allocated = perRecord.reduce((sum, row) => sum + row.share, 0);
@@ -149,30 +216,12 @@ export function MoneyScreen() {
         amount,
       }))
       .sort((a, b) => b.amount - a.amount);
-  }, [expenses, categories, since, today]);
+  }, [expenses, categories, period]);
 
   return (
     <div className="pb-8">
-      <div className="flex gap-2" role="group" aria-label="Period">
-        {[3, 12, 60].map((option) => (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={months === option}
-            onClick={() => setMonths(option)}
-            className={`flex-1 min-h-touch md:min-h-touch-desktop rounded-lg border text-body-md font-medium ${
-              months === option
-                ? "bg-primary-container text-white border-primary-container"
-                : "bg-card text-text border-border"
-            }`}
-          >
-            {option === 3 ? "3 months" : option === 12 ? "12 months" : "5 years"}
-          </button>
-        ))}
-      </div>
-
       <section className="card p-4 mt-4">
-        <p className="data-label">The farm, {periodLabel(since, today)}</p>
+        <p className="data-label">The farm, {periodLabel(period)}</p>
         <p
           className={`mt-2 text-headline-lg-mobile md:text-headline-lg font-mono ${
             farmProfit < 0 ? "text-alert" : "text-primary"
@@ -305,8 +354,3 @@ function Line({ label, value, hint }: { label: string; value: number; hint?: str
   );
 }
 
-function periodLabel(since: string, today: string): string {
-  const [sy, sm] = since.split("-").map(Number);
-  const [ty, tm] = today.split("-").map(Number);
-  return `${MONTHS[(sm ?? 1) - 1]} ${sy} to ${MONTHS[(tm ?? 1) - 1]} ${ty}`;
-}

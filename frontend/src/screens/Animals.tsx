@@ -114,24 +114,29 @@ export function AnimalsScreen() {
       </div>
 
       {/*
-        SPEC 18 — eight species, six chips.
-        Splitting poultry into four would have made this row nine chips wide on
-        a 390px screen. Every one of them would have been off the edge of it,
-        reachable only by swiping a horizontal strip with no indication that
-        there was anything further along — the species at the end would simply
-        have stopped existing for anyone who did not think to drag.
+        SPEC 18.6 — eight species on a 390px screen.
 
-        So the birds collapse into one chip, and the four open in a second row
-        underneath when it is chosen. That keeps the top row at six, which is
-        one fewer than it held before the split, and it makes "show me the
-        birds" answerable in a tap — a question worth asking on a farm that
-        keeps four kinds of them, and one the old single `poultry` value could
-        answer only by accident.
+        Two things are going on here, and only together do they work.
 
-        The second row appears only when it is relevant, so nobody who keeps no
+        **The chips wrap.** This row used to scroll horizontally, and measured
+        on a 390px viewport it needed 462px inside a 358px box: Pigs was clipped
+        and Poultry sat entirely off the edge, reachable only by dragging a
+        strip that gives no sign there is anything further along. That was true
+        *before* the split — the species at the end had already stopped existing
+        for anyone who did not think to swipe. Wrapping costs a second line and
+        makes every species visible without being discovered first.
+
+        **The birds collapse into one chip**, opening into a second row when
+        chosen. Wrapping alone would have left nine chips over three lines,
+        pushing the list itself off the first screen. Together they fit six on
+        two lines, and make "show me the birds" answerable in a tap — a question
+        worth asking on a farm keeping four kinds of them, and one the old
+        single `poultry` value could answer only by accident.
+
+        The bird row appears only when it is relevant, so nobody who keeps no
         birds ever sees it.
       */}
-      <div className="mt-3 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter by species">
+      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Filter by species">
         <FilterChip active={species === "all"} onClick={() => choose("all")}>
           All
         </FilterChip>
@@ -148,7 +153,7 @@ export function AnimalsScreen() {
       </div>
 
       {birdsOpen && (
-        <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter by bird">
+        <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Filter by bird">
           <FilterChip active={species === "birds"} onClick={() => choose("birds")}>
             All birds
           </FilterChip>
@@ -163,7 +168,7 @@ export function AnimalsScreen() {
       {/* Kept out of the species row: it is a different question, and it only
           appears when there is something to find (SPEC 13.4). */}
       {missingAge > 0 && (
-        <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+        <div className="mt-2 flex flex-wrap gap-2">
           <FilterChip
             active={ageUnknownOnly}
             onClick={() => {

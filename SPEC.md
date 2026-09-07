@@ -561,6 +561,9 @@ Rooms (home) · Room detail · Record detail · Animals list · Move · Add or
 purchase · Sell · Log death · Alerts · Calendar · Health · Money summary ·
 Expenses · More
 
+Money later gained a second tab, Analytics (19). It is a tab rather than a
+fifteenth screen and rather than a sixth destination — see 19.4.
+
 Navigation: **Rooms · Animals · Calendar · Money · More** — bottom bar on mobile,
 left sidebar on desktop. One shared navigation component. The mockups show three
 different bars because each screen was generated separately; that is an artefact,
@@ -970,25 +973,150 @@ for cattle sharing with goats, a warning that unlike animals are together. Four
 kinds of bird in one room is the ordinary case it was never about. Mixed still
 means mixed for everything else, including one bird species housed with a mammal.
 
-### 18.6 Eight species, six chips
+### 18.6 Eight species on a 390px screen
 
-The Animals filter row would have gone from six chips to nine. On a 390px screen
-every one of them is off the edge, reachable only by dragging a horizontal strip
-that gives no sign there is anything further along — the species at the end stop
-existing for anyone who does not think to swipe.
+Two changes, and only together do they work.
 
-So the birds collapse into one chip, and the four open in a second row beneath it
-when chosen:
+**The chips wrap.** The filter row scrolled horizontally, and measured on a
+390px viewport it wanted 462px of chips inside a 358px box. Pigs was clipped and
+the last species sat entirely off the edge, reachable only by dragging a strip
+that gives no sign there is anything further along. That was already true before
+the split — the species at the end had stopped existing for anyone who did not
+think to swipe. Wrapping costs a second line and makes every species visible
+without having to be discovered.
+
+**The birds collapse into one chip**, opening into a further row when chosen:
 
 ```
-All · Cattle · Goats · Sheep · Pigs · Birds
-        All birds · Hens · Ducks · Geese · Turkeys     ← only while Birds is chosen
+All · Cattle · Goats · Sheep          ← wraps
+Pigs · Birds
+        All birds · Hens · Ducks · Geese     ← only while Birds is chosen
+        Turkeys
 ```
 
-Six chips on the top row, one fewer than before the split. The Birds chip stays
-active while one of the four is selected, so the second row never appears to
-belong to nothing, and it never appears at all for a farm that keeps no birds.
+Wrapping alone would have left nine chips over three lines, pushing the list
+itself off the first screen. Together they fit six on two lines. Measured on a
+390px viewport: every chip fully visible, no horizontal overflow, 48px touch
+targets.
+
+The Birds chip stays active while one of the four is selected, so the second row
+never appears to belong to nothing, and it never appears at all for a farm that
+keeps no birds.
 
 `birds` is a real filter value, not just a heading: "show me the birds" is worth
 asking on a farm keeping four kinds, and the old single `poultry` value could
 answer it only by accident.
+
+---
+
+## 19. Analytics
+
+A second tab on Money, answering what the farm holds and what it has cost and
+earned. Three parts.
+
+### 19.1 Headcount census
+
+Every species with live head, and a farm total:
+
+```
+Cattle 7 · Pigs 2 · Hens 240
+```
+
+**Head counts, never percentages** (4.2). Animals and groups are both counted by
+head — one cow is one head, a flock of 240 hens is 240. Each row also names how
+many records those head are spread across, because one flock of 240 and 240
+single birds are the same headcount and a very different farm.
+
+A species with no live head is left out rather than shown as zero. A farm that
+has never kept geese should not have to read a line telling it so, and one that
+sold its last goose last month is told by the line's absence rather than by a
+zero that reads like a mistake.
+
+**One counting rule, taking a date.** `censusAsAt(date, …)` is the only count;
+"right now" is that function asked for today, not a second and simpler version
+of it. This is the whole design of the module. A live count and an as-at count
+that can drift apart produce two screens disagreeing about how many hens the
+farm has, with no way for a reader to tell which is lying.
+
+The rule is the server's own, from `app/domain/reconcile.py`, with a date bound
+added to each term:
+
+```
+head = initial_head_count − sold − died − split away        (clamped at zero)
+```
+
+Everything the app knows about a count is an event carrying a date, which is
+what makes the as-at view cheap: no snapshots and no history table, just the
+same subtraction with `<= asAt` on each part. The clamp is 6.7: two offline
+devices can each sell 5 head from a group of 8, both sales are real and both are
+kept, so the count floors at zero and the anomaly is raised on the server.
+
+The date bound on *splits* is the subtle part. A split moves head to a child
+record with its own history (4.3), so before the split date the head was still
+on the parent, and that is where a past census must count it. Subtracting every
+child regardless of date would show a group already short of head it had not yet
+lost.
+
+### 19.2 Money by species
+
+For the chosen period, per species: **spent** on purchases, **earned** on sales,
+and the **difference**, with a farm total row.
+
+**Laid out as a list, not a table.** Four columns measured 462px of content in a
+358px box on a 390px screen, which put Difference — the one figure the screen is
+opened for — off the right edge behind an inner scrollbar nobody knows is there.
+Each species is a stacked row instead: the difference leads on the right, the
+counts sit under the name, and the two exact figures it came from sit beneath.
+No horizontal scrolling anywhere.
+
+These are exact. Purchases and sales belong to a record directly and carry their
+own price, so nothing here is allocated and none of it needs the "estimated"
+labelling 4.4 requires.
+
+**The difference is not profit, and the screen says so in words.** It carries no
+expenses, no treatment costs and no call-out fees, because none of those can be
+pinned on a species exactly (4.4). A farmer reading `+2,400,000` beside Hens and
+taking it as what the hens made would be wrong by the whole feed bill. The
+summary tab keeps the exact farm profit and the estimated per-record figures;
+this tab points at it.
+
+Money on a purchase or sale whose record cannot be found is reported as its own
+line rather than dropped. Records are only ever soft-deleted (4.8) so it should
+always be zero, but a table of money that quietly does not add up is worse than
+one that names its remainder.
+
+### 19.3 Counts beside the money
+
+Every money row also carries `4 bought, 2 sold`.
+
+Without them a single UGX 4M bull reads exactly like forty hens at 100,000 each.
+The money alone cannot tell those apart, and they are entirely different pieces
+of news.
+
+### 19.4 Where it lives
+
+**A tab on Money, not a sixth destination.** 11 fixes five and means it.
+
+Analytics belongs with Money on the merits rather than by elimination: both read
+sales and purchases, both are asked over a period, and the period selector is
+the same control. The period lives above both tabs, so switching keeps it —
+someone who set five years to look at the census does not want the money table
+answering for twelve months instead.
+
+The tab is in the URL (`/money` and `/money/analytics`), so the back button
+leaves Analytics rather than the whole screen, and a reload lands where it was.
+`/money/*` is a single route, which is what keeps the shell mounted, and the
+chosen period alive, as the tabs swap underneath it.
+
+### 19.5 What this shares
+
+Nothing here re-derives a figure that already exists.
+
+- `domain/period.ts` — the window, the membership test and the wording. Two
+  screens each working out their own range is how they end up reporting
+  different periods under an identical label.
+- `domain/money.ts` — `farmMoney` is 4.5's farm figure, now read by both tabs
+  rather than summed inside the summary screen.
+- `domain/census.ts` — the counting rule above.
+- `components/PeriodSelector.tsx` — one selector, so both tabs always offer the
+  same choices.

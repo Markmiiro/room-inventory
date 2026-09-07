@@ -82,7 +82,7 @@ function AppShell() {
             <Route path="/death" element={<LogDeathScreen />} />
             <Route path="/expenses" element={<ExpensesScreen />} />
             <Route path="/categories" element={<CategoriesScreen />} />
-            <Route path="/money" element={<MoneyScreen />} />
+            <Route path="/money/*" element={<MoneyScreen />} />
             <Route path="/more" element={<MoreScreen />} />
             <Route path="/customers" element={<ContactsScreen kind="customer" />} />
             <Route path="/vets" element={<ContactsScreen kind="vet" />} />
