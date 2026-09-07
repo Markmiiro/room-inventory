@@ -1320,8 +1320,23 @@ Produce money joins the farm's figures, broken out rather than blended:
   counting rule, not two.
 
 Outtakes for `home_use`, `seed`, `gift` and `spoiled` earn nothing, and their
-value at average cost should be visible somewhere. Spoilage in particular is a
-real loss the farm should be able to see.
+value at average cost is shown on the produce row: *"186 kg left without being
+sold, 186 kg of it spoiled — about UGX 150,000 at what it cost."*
+
+The average is drawn from **every** purchase rather than the period's, because
+produce bought last year and eaten this year cost what it cost; re-deriving it
+from one period's purchases would price this year's spoilage off sacks that had
+nothing to do with it. Where nothing was ever bought the weight is shown with no
+value, because then the cost is unknown rather than zero — and a loss reported
+as "UGX 0" reads as no loss at all.
+
+**A move is not produce leaving the farm.** It is excluded from weight out
+entirely: the mirrored intake has already added it back, so counting it would
+double the weight and report a loss that never happened.
+
+Head and kilograms are never added together. The census shows "what the farm
+holds" in head and "what the stores hold" in kilograms as two sections, because
+a total across both would mean nothing.
 
 ### 20.11 Screens
 

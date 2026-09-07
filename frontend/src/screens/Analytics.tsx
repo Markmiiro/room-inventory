@@ -2,15 +2,26 @@ import { useMemo } from "react";
 
 import { SpeciesLabel } from "../components/SpeciesLabel";
 import { todayInEAT } from "../db/ids";
-import { allDeaths, allMoves, allPurchases, allSales } from "../db/queries";
+import {
+  allDeaths,
+  allMoves,
+  allProduceTypes,
+  allPurchases,
+  allSales,
+  allStockEvents,
+} from "../db/queries";
 import { db } from "../db/schema";
-import type { Death, Move, Purchase, Record_, Sale } from "../db/types";
+import type { Death, Move, ProduceType, Purchase, Record_, Sale } from "../db/types";
 import { censusAsAt } from "../domain/census";
 import { formatUGX, plural } from "../domain/format";
-import { moneyBySpecies } from "../domain/money";
+import { moneyBySpecies, produceMoney } from "../domain/money";
 import { type Period, periodLabel } from "../domain/period";
 import { speciesLabel } from "../domain/rules";
+import { balancesAsAt, type StockInput } from "../domain/stores";
 import { useLiveQuery } from "../sync/useSync";
+import { formatKg } from "./Stores";
+
+const NO_STOCK: StockInput = { intakes: [], outtakes: [], counts: [] };
 
 /**
  * Analytics — SPEC 19.
@@ -33,6 +44,9 @@ export function AnalyticsScreen({ period }: { period: Period }) {
   const sales = useLiveQuery(allSales, [], [] as Sale[]);
   const purchases = useLiveQuery(allPurchases, [], [] as Purchase[]);
   const deaths = useLiveQuery(allDeaths, [], [] as Death[]);
+  // SPEC 20.10 — produce joins both halves of this screen.
+  const produceTypes = useLiveQuery(allProduceTypes, [], [] as ProduceType[]);
+  const stock = useLiveQuery(allStockEvents, [], NO_STOCK);
 
   // SPEC 19.1 — "right now" is the one census function asked for today. There
   // is no separate live count that could drift away from it.
@@ -44,6 +58,34 @@ export function AnalyticsScreen({ period }: { period: Period }) {
   const money = useMemo(
     () => moneyBySpecies(period, { records, sales, purchases }),
     [period, records, sales, purchases],
+  );
+
+  /**
+   * SPEC 20.10 — produce in the census, from the same date-bounded replay the
+   * Stores screen uses. One counting rule, not two: a census that derived its
+   * own produce figures could disagree with the store card they came from.
+   */
+  const produceHeld = useMemo(() => {
+    const totals = new Map<string, { kg: number; partial: boolean }>();
+    for (const balance of balancesAsAt(today, stock)) {
+      const held = totals.get(balance.produce_type_id) ?? { kg: 0, partial: false };
+      held.kg += balance.kg;
+      held.partial = held.partial || balance.sacksPartial;
+      totals.set(balance.produce_type_id, held);
+    }
+    return [...totals.entries()]
+      .map(([id, held]) => ({
+        id,
+        name: produceTypes.find((t) => t.id === id)?.name ?? "Unknown",
+        ...held,
+      }))
+      .filter((row) => row.kg > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [today, stock, produceTypes]);
+
+  const produce = useMemo(
+    () => produceMoney(period, { produceTypes, intakes: stock.intakes, outtakes: stock.outtakes }),
+    [period, produceTypes, stock],
   );
 
   return (
@@ -84,6 +126,25 @@ export function AnalyticsScreen({ period }: { period: Period }) {
           </>
         )}
       </section>
+
+      {/* SPEC 20.10 — produce alongside the headcount, as at today, from the
+          same replay the Stores screen reads. Head and kilograms are never
+          added together: they are different quantities and a farm total across
+          both would mean nothing. */}
+      {produceHeld.length > 0 && (
+        <section className="card p-4 mt-4">
+          <h2 className="text-headline-sm text-primary">What the stores hold</h2>
+          <p className="data-label mt-1">Today</p>
+          <ul className="mt-3 flex flex-col gap-2">
+            {produceHeld.map((row) => (
+              <li key={row.id} className="flex items-baseline justify-between gap-3">
+                <span className="text-body-md truncate">{row.name}</span>
+                <span className="data-value font-bold shrink-0">{formatKg(row.kg)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="card p-4 mt-4">
         <h2 className="text-headline-sm text-primary">Spent and earned by species</h2>
@@ -152,6 +213,87 @@ export function AnalyticsScreen({ period }: { period: Period }) {
           </>
         )}
       </section>
+
+      {/* SPEC 20.10 — the produce section, beside the species. */}
+      {produce.rows.length > 0 && (
+        <section className="card p-4 mt-4">
+          <h2 className="text-headline-sm text-primary">Produce, spent and earned</h2>
+          <p className="data-label mt-1">{periodLabel(period)}</p>
+
+          <ul className="mt-3 flex flex-col">
+            {produce.rows.map((row) => (
+              <li key={row.produce_type_id} className="py-3 border-t border-border">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-body-md font-semibold min-w-0 truncate">{row.name}</span>
+                  <span
+                    className={`data-value font-bold shrink-0 ${
+                      row.difference < 0 ? "text-alert" : "text-primary"
+                    }`}
+                  >
+                    {row.difference >= 0 ? "+" : ""}
+                    {formatUGX(row.difference)}
+                  </span>
+                </div>
+                {/* Weight is the thing a farm actually sells, so it sits beside
+                    the money rather than under it: "UGX 2.6M of coffee" says
+                    nothing until you know how much left the store to earn it. */}
+                <p className="data-label mt-1">
+                  {formatKg(row.kgIn)} in · {formatKg(row.kgOut)} out · {row.bought} bought,{" "}
+                  {row.sold} sold
+                </p>
+                <p className="text-body-md text-text-muted mt-1">
+                  Spent {formatUGX(row.spent)} · earned {formatUGX(row.earned)}
+                </p>
+                {/* SPEC 20.10 — spoilage in particular is a real loss the farm
+                    should be able to see. */}
+                {row.takenWithoutSaleKg > 0 && (
+                  <p className="text-body-md text-text-muted mt-1">
+                    {formatKg(row.takenWithoutSaleKg)} left without being sold
+                    {row.spoiledKg > 0 && `, ${formatKg(row.spoiledKg)} of it spoiled`}
+                    {row.takenWithoutSaleValue !== null
+                      ? ` — about ${formatUGX(row.takenWithoutSaleValue)} at what it cost.`
+                      : "."}
+                  </p>
+                )}
+              </li>
+            ))}
+
+            <li className="py-3 border-t-2 border-border">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-body-md font-semibold">All produce</span>
+                <span
+                  className={`data-value font-bold shrink-0 ${
+                    produce.totals.difference < 0 ? "text-alert" : "text-primary"
+                  }`}
+                >
+                  {produce.totals.difference >= 0 ? "+" : ""}
+                  {formatUGX(produce.totals.difference)}
+                </span>
+              </div>
+              <p className="data-label mt-1">
+                {formatKg(produce.totals.kgIn)} in · {formatKg(produce.totals.kgOut)} out ·{" "}
+                {produce.totals.bought} bought, {produce.totals.sold} sold
+              </p>
+              <p className="text-body-md text-text-muted mt-1">
+                Spent {formatUGX(produce.totals.spent)} · earned {formatUGX(produce.totals.earned)}
+              </p>
+            </li>
+          </ul>
+
+          {/*
+            SPEC 20.9 — said in words wherever a produce value appears. Without
+            it the difference reads as what growing the coffee was worth, and it
+            is not: the growing was paid for under Expenses.
+          */}
+          <p className="text-body-md text-text-muted mt-4">
+            Produce grown here enters at <strong className="text-text">no cost</strong>, because
+            seed, labour and fertiliser are already recorded under Expenses. So this difference is
+            not what the crop was worth to grow — and like the species figures above, it leaves out
+            expenses entirely.
+          </p>
+        </section>
+      )}
+
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   allMoves,
   allPurchases,
   allSales,
+  allStockEvents,
   allVetVisits,
   allVisitNotes,
   liveCategories,
@@ -30,6 +31,7 @@ import { departuresFrom, expenseShareFor } from "../domain/allocation";
 import { callOutFeeFor, totalCallOutFees } from "../domain/visits";
 import { formatUGX, formatUGXShort } from "../domain/format";
 import { farmMoney } from "../domain/money";
+import type { StockInput } from "../domain/stores";
 import { type Period, periodFrom, periodLabel, rowsInPeriod } from "../domain/period";
 import { PeriodSelector } from "../components/PeriodSelector";
 import { useLiveQuery } from "../sync/useSync";
@@ -68,6 +70,8 @@ import { AnalyticsScreen } from "./Analytics";
  * single route, which is what keeps this component mounted — and therefore the
  * chosen period alive — as the two tabs swap underneath it.
  */
+const NO_STOCK: StockInput = { intakes: [], outtakes: [], counts: [] };
+
 export function MoneyScreen() {
   const today = todayInEAT();
   const [months, setMonths] = useState(12);
@@ -135,12 +139,21 @@ function SummaryTab({ period }: { period: Period }) {
   const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
   const visitNotes = useLiveQuery(allVisitNotes, [], [] as VisitNote[]);
   const categories = useLiveQuery(liveCategories, [], [] as ExpenseCategory[]);
+  // SPEC 20.10 — a sold outtake is income and a bought intake is a cost, so
+  // both belong in the farm figure rather than in a second one.
+  const stock = useLiveQuery(allStockEvents, [], NO_STOCK);
 
   const inPeriod = <T extends { date: string }>(rows: T[]) => rowsInPeriod(period, rows);
 
   // SPEC 4.5, shared with the Analytics tab so the two cannot disagree about
   // what a period contains.
-  const farm = farmMoney(period, { sales, purchases, expenses });
+  const farm = farmMoney(period, {
+    sales,
+    purchases,
+    expenses,
+    intakes: stock.intakes,
+    outtakes: stock.outtakes,
+  });
   const salesTotal = farm.sales;
   const purchaseTotal = farm.purchases;
   const expenseTotal = farm.expenses;
@@ -240,6 +253,31 @@ function SummaryTab({ period }: { period: Period }) {
           <Line label="Purchases" value={-purchaseTotal} />
           <Line label="Expenses" value={-expenseTotal} />
         </dl>
+
+        {/*
+          SPEC 20.10 and 20.16 Q3 — one farm total, with produce broken out.
+
+          Shown only when there is produce money, so a farm keeping only
+          livestock never reads a pair of zeroes. The note about garden produce
+          matters: with it entering at zero cost (SPEC 20.9), selling a harvest
+          lands the whole price with no matching cost and the figure above
+          swings sharply positive. That is correct rather than double-counted,
+          and a farmer should not have to work that out unaided.
+        */}
+        {(farm.produceSales > 0 || farm.producePurchases > 0) && (
+          <>
+            <dl className="mt-3 pt-3 border-t border-border grid grid-cols-2 gap-3">
+              <Line label="Of that, produce sold" value={farm.produceSales} />
+              <Line label="Produce bought" value={-farm.producePurchases} />
+            </dl>
+            <p className="text-body-md text-text-muted mt-3">
+              Produce is counted in the figure above alongside the animals. What was grown here
+              entered the stores at no cost, because seed, labour and fertiliser are already in
+              Expenses — so selling a harvest adds its whole price with no cost beside it. That is
+              not an error; the growing was paid for earlier.
+            </p>
+          </>
+        )}
 
         {calloutTotal > 0 && (
           // SPEC 14.3 — the fee counts in the farm total, and the part of it

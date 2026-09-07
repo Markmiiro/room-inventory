@@ -100,12 +100,17 @@ describe("the farm totals", () => {
       purchases: [purchase({ price: 1_000_000 })],
       expenses: [expense({ amount: 200_000 })],
     });
-    expect(money).toEqual({
+    expect(money).toMatchObject({
       sales: 1_500_000,
       purchases: 1_000_000,
       expenses: 200_000,
       profit: 300_000,
     });
+    // SPEC 20.10 — the produce half is broken out, and is zero on a farm that
+    // keeps none. Asserted rather than ignored: a produce figure leaking into a
+    // livestock-only farm's totals would be silent.
+    expect(money.produceSales).toBe(0);
+    expect(money.producePurchases).toBe(0);
   });
 
   it("reports a loss as a negative figure rather than hiding it", () => {
