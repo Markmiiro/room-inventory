@@ -13,10 +13,17 @@ import type {
 import { typeLabel } from "../domain/alerts";
 import { plural } from "../domain/format";
 import { recordsCovered, timingInWords } from "../domain/schedules";
-import { speciesLabel } from "../domain/rules";
+import { BIRD_SPECIES, MAMMAL_SPECIES, scheduleSpeciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
 
-const SPECIES_OPTIONS: ScheduleSpecies[] = ["all", "cattle", "goats", "sheep", "pigs", "poultry"];
+/**
+ * SPEC 18 — the birds are choosable one at a time or all at once.
+ *
+ * `birds` sits directly before the four it covers, so the relationship is
+ * visible in the order rather than needing explaining. It is what the seeded
+ * Newcastle and Gumboro rows use.
+ */
+const SPECIES_OPTIONS: ScheduleSpecies[] = ["all", ...MAMMAL_SPECIES, "birds", ...BIRD_SPECIES];
 const TYPES: HealthType[] = ["vaccination", "deworming", "treatment", "vitamin", "other"];
 
 const APPLIES_LABEL: Record<ScheduleAppliesTo, string> = {
@@ -26,7 +33,7 @@ const APPLIES_LABEL: Record<ScheduleAppliesTo, string> = {
 };
 
 function speciesHeading(species: ScheduleSpecies): string {
-  return species === "all" ? "Every species" : speciesLabel(species);
+  return scheduleSpeciesLabel(species);
 }
 
 /**
@@ -302,7 +309,7 @@ function ScheduleDialog({
           <div className="flex flex-wrap gap-2">
             {SPECIES_OPTIONS.map((option) => (
               <Chip key={option} active={species === option} onClick={() => setSpecies(option)}>
-                {option === "all" ? "All species" : speciesLabel(option)}
+                {scheduleSpeciesLabel(option)}
               </Chip>
             ))}
           </div>

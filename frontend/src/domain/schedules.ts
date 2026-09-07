@@ -1,6 +1,13 @@
-import type { HealthRecord, Record_, TreatmentSchedule } from "../db/types";
+import type {
+  HealthRecord,
+  Record_,
+  ScheduleSpecies,
+  Species,
+  TreatmentSchedule,
+} from "../db/types";
 import { ageBasis } from "./age";
 import { addDays, daysBetween } from "./format";
+import { isBird } from "./rules";
 
 /**
  * SPEC 13.3 — what each record is due for, and when.
@@ -49,6 +56,19 @@ export interface ScheduleInputs {
 }
 
 /**
+ * Whether a schedule's species setting covers one record's species.
+ *
+ * `all` covers everything and `birds` covers the four of SPEC 18 — the seeded
+ * Newcastle and Gumboro rows are written that way, because one interval the
+ * farmer can edit once beats four copies that have to be kept agreeing.
+ */
+export function speciesCovered(scope: ScheduleSpecies, species: Species): boolean {
+  if (scope === "all") return true;
+  if (scope === "birds") return isBird(species);
+  return scope === species;
+}
+
+/**
  * Whether a schedule covers a record at all — species and kind (SPEC 13.3).
  *
  * Deliberately says nothing about age. A record a schedule applies to but whose
@@ -57,7 +77,7 @@ export interface ScheduleInputs {
  * applicable".
  */
 export function scheduleCovers(schedule: TreatmentSchedule, record: Record_): boolean {
-  if (schedule.species !== "all" && schedule.species !== record.species) return false;
+  if (!speciesCovered(schedule.species, record.species)) return false;
   if (schedule.applies_to === "animals" && record.kind !== "animal") return false;
   if (schedule.applies_to === "groups" && record.kind !== "group") return false;
   return true;

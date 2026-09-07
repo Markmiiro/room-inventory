@@ -52,9 +52,9 @@ SCHEDULES = [
     ("Deworming", "goats", "deworming", 30, 90),
     ("Deworming", "sheep", "deworming", 30, 90),
     ("Deworming", "pigs", "deworming", 60, 90),
-    ("Newcastle vaccination", "poultry", "vaccination", 7, 90),
+    ("Newcastle vaccination", "birds", "vaccination", 7, 90),
     # Listed as one-off in SPEC 13.5, so it has no interval.
-    ("Gumboro vaccination", "poultry", "vaccination", 14, None),
+    ("Gumboro vaccination", "birds", "vaccination", 14, None),
 ]
 
 

@@ -4,13 +4,27 @@ import { Link } from "react-router-dom";
 import { PlusIcon, SearchIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import { activeRecords, liveRooms } from "../db/queries";
+import { META, getMeta, setMeta } from "../db/schema";
 import type { Record_, Room, Species } from "../db/types";
 import { AGE_UNKNOWN_CHIP, isAgeUnknown } from "../domain/age";
 import { formatAge, headUnit, plural } from "../domain/format";
-import { speciesLabel } from "../domain/rules";
+import { ALL_SPECIES, BIRD_SPECIES, MAMMAL_SPECIES, isBird, speciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
 
-const SPECIES: Species[] = ["cattle", "goats", "sheep", "pigs", "poultry"];
+/**
+ * SPEC 18 — what the filter row can be set to.
+ *
+ * `birds` is a real filter value, not just a heading: "show me the birds" is a
+ * question worth asking on a farm holding four kinds of them, and it is also
+ * what keeps the top row down to six chips. See the chip row below.
+ */
+type SpeciesFilter = Species | "birds" | "all";
+
+function matchesSpeciesFilter(species: Species, filter: SpeciesFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "birds") return isBird(species);
+  return species === filter;
+}
 
 /** SPEC 6.13 — every list assumes thousands of rows. Rendering them all would
  *  make the screen unusable on the phone this app is for, so the list is capped
@@ -31,7 +45,7 @@ export function AnimalsScreen() {
   const rooms = useLiveQuery(liveRooms, [], [] as Room[]);
 
   const [search, setSearch] = useState("");
-  const [species, setSpecies] = useState<Species | "all">("all");
+  const [species, setSpecies] = useState<SpeciesFilter>("all");
   // SPEC 13.4 — a filter for the records whose age cannot be computed, so the
   // list of what to fix in is reachable rather than only countable on Alerts.
   const [ageUnknownOnly, setAgeUnknownOnly] = useState(false);
@@ -42,7 +56,7 @@ export function AnimalsScreen() {
   const matches = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return records
-      .filter((record) => species === "all" || record.species === species)
+      .filter((record) => matchesSpeciesFilter(record.species, species))
       .filter((record) => !ageUnknownOnly || isAgeUnknown(record))
       .filter(
         (record) =>
@@ -54,9 +68,18 @@ export function AnimalsScreen() {
       .sort((a, b) =>
         a.species === b.species
           ? a.tag.localeCompare(b.tag)
-          : SPECIES.indexOf(a.species) - SPECIES.indexOf(b.species),
+          : ALL_SPECIES.indexOf(a.species) - ALL_SPECIES.indexOf(b.species),
       );
   }, [records, search, species, ageUnknownOnly]);
+
+  // The bird row is open while the birds are the subject, whether that is all
+  // of them or one of them.
+  const birdsOpen = species === "birds" || (species !== "all" && isBird(species));
+
+  function choose(next: SpeciesFilter) {
+    setSpecies(next);
+    setLimit(PAGE);
+  }
 
   const shown = matches.slice(0, limit);
   const missingAge = useMemo(() => records.filter(isAgeUnknown).length, [records]);
@@ -90,23 +113,52 @@ export function AnimalsScreen() {
         />
       </div>
 
+      {/*
+        SPEC 18 — eight species, six chips.
+        Splitting poultry into four would have made this row nine chips wide on
+        a 390px screen. Every one of them would have been off the edge of it,
+        reachable only by swiping a horizontal strip with no indication that
+        there was anything further along — the species at the end would simply
+        have stopped existing for anyone who did not think to drag.
+
+        So the birds collapse into one chip, and the four open in a second row
+        underneath when it is chosen. That keeps the top row at six, which is
+        one fewer than it held before the split, and it makes "show me the
+        birds" answerable in a tap — a question worth asking on a farm that
+        keeps four kinds of them, and one the old single `poultry` value could
+        answer only by accident.
+
+        The second row appears only when it is relevant, so nobody who keeps no
+        birds ever sees it.
+      */}
       <div className="mt-3 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter by species">
-        <FilterChip active={species === "all"} onClick={() => setSpecies("all")}>
+        <FilterChip active={species === "all"} onClick={() => choose("all")}>
           All
         </FilterChip>
-        {SPECIES.map((option) => (
-          <FilterChip
-            key={option}
-            active={species === option}
-            onClick={() => {
-              setSpecies(option);
-              setLimit(PAGE);
-            }}
-          >
+        {MAMMAL_SPECIES.map((option) => (
+          <FilterChip key={option} active={species === option} onClick={() => choose(option)}>
             {speciesLabel(option)}
           </FilterChip>
         ))}
+        {/* Stays active while one of the four is chosen, so the row below it
+            never appears to belong to nothing. */}
+        <FilterChip active={birdsOpen} onClick={() => choose("birds")}>
+          Birds
+        </FilterChip>
       </div>
+
+      {birdsOpen && (
+        <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter by bird">
+          <FilterChip active={species === "birds"} onClick={() => choose("birds")}>
+            All birds
+          </FilterChip>
+          {BIRD_SPECIES.map((option) => (
+            <FilterChip key={option} active={species === option} onClick={() => choose(option)}>
+              {speciesLabel(option)}
+            </FilterChip>
+          ))}
+        </div>
+      )}
 
       {/* Kept out of the species row: it is a different question, and it only
           appears when there is something to find (SPEC 13.4). */}
@@ -123,6 +175,8 @@ export function AnimalsScreen() {
           </FilterChip>
         </div>
       )}
+
+      <PoultrySplitNote />
 
       <p className="data-label mt-3">
         {animals} {plural(animals, "animal")} · {groups} {plural(groups, "group")}
@@ -240,5 +294,48 @@ function AnimalRow({ record, room }: { record: Record_; room: Room | undefined }
         )}
       </span>
     </Link>
+  );
+}
+
+/**
+ * What the SPEC 18 split changed, said out loud.
+ *
+ * The migration moved every `poultry` record onto `hens` because that is the
+ * only defensible destination — but it is still a guess for any bird that was
+ * not a hen, and the app is the one thing that cannot tell which. The person
+ * holding the phone can.
+ *
+ * So the count is shown rather than logged, once, with the filter that reaches
+ * the rows in question. A migration that silently retyped part of the flock and
+ * mentioned it nowhere would be indistinguishable from data loss — the records
+ * would still be there, saying the wrong thing, and nothing would ever prompt
+ * anyone to look.
+ *
+ * It is dismissible and does not come back: this is information, not an alert,
+ * and SPEC 4.6 keeps those separate.
+ */
+function PoultrySplitNote() {
+  const moved = useLiveQuery(() => getMeta(META.poultrySplit, 0), [], 0);
+  const seen = useLiveQuery(() => getMeta(META.poultrySplitSeen, false), [], false);
+
+  if (!moved || seen) return null;
+
+  return (
+    <div className="card p-4 mt-3">
+      <p className="text-body-md text-text">
+        {moved} {plural(moved, "record")} moved from Poultry to Hens.
+      </p>
+      <p className="text-body-md text-text-muted mt-1">
+        Poultry is now four species — hens, ducks, geese and turkeys. Anything that
+        was not a hen needs changing on the record itself.
+      </p>
+      <button
+        type="button"
+        className="chip mt-3 min-h-touch md:min-h-touch-desktop px-4 border border-border bg-card text-text"
+        onClick={() => void setMeta(META.poultrySplitSeen, true)}
+      >
+        Done
+      </button>
+    </div>
   );
 }

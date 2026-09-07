@@ -10,11 +10,18 @@ import { db } from "../db/schema";
 import type { Move, Record_, RecordKind, Room, Sex, Source, Species } from "../db/types";
 import { alertsForRecord, type Alert } from "../domain/alerts";
 import { formatAge, formatDate, headUnit } from "../domain/format";
-import { findTagClash, isOverCapacity, occupancy, roomType, speciesBreakdown, speciesLabel } from "../domain/rules";
+import {
+  ALL_SPECIES,
+  findTagClash,
+  isOverCapacity,
+  occupancy,
+  roomType,
+  speciesBreakdown,
+  speciesLabel,
+} from "../domain/rules";
 import { todayInEAT } from "../db/ids";
 import { useLiveQuery } from "../sync/useSync";
 
-const SPECIES: Species[] = ["cattle", "goats", "sheep", "pigs", "poultry"];
 
 /**
  * Room detail — what is in this room, its move log, and the two things you can
@@ -333,7 +340,7 @@ function AddRecordDialog({ room, onClose }: { room: Room; onClose: () => void })
         <fieldset className="mt-4">
           <legend className="data-label mb-2">Species</legend>
           <div className="flex flex-wrap gap-2">
-            {SPECIES.map((option) => (
+            {ALL_SPECIES.map((option) => (
               <button
                 key={option}
                 type="button"

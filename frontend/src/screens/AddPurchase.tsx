@@ -7,10 +7,9 @@ import { createRecord, updateRecord } from "../db/mutations";
 import { activeRecords, liveRooms } from "../db/queries";
 import type { Record_, RecordKind, Room, Sex, Source, Species } from "../db/types";
 import { formatUGX } from "../domain/format";
-import { findTagClash, speciesLabel } from "../domain/rules";
+import { ALL_SPECIES, findTagClash, speciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
 
-const SPECIES: Species[] = ["cattle", "goats", "sheep", "pigs", "poultry"];
 
 const SOURCES: Array<{ value: Source; label: string }> = [
   { value: "born_here", label: "Born here" },
@@ -149,7 +148,7 @@ export function AddPurchaseScreen() {
       <section className="card p-4 mt-4">
         <h2 className="text-headline-sm text-primary">Species</h2>
         <div className="mt-3 flex flex-wrap gap-2">
-          {SPECIES.map((option) => (
+          {ALL_SPECIES.map((option) => (
             <button
               key={option}
               type="button"

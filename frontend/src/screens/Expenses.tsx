@@ -11,10 +11,9 @@ import {
 import { allExpenses, liveCategories, liveRooms } from "../db/queries";
 import type { Expense, ExpenseCategory, ExpenseScope, Room, Species } from "../db/types";
 import { formatDate, formatUGX } from "../domain/format";
-import { speciesLabel } from "../domain/rules";
+import { ALL_SPECIES, speciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
 
-const SPECIES: Species[] = ["cattle", "goats", "sheep", "pigs", "poultry"];
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -385,7 +384,7 @@ function AddExpenseDialog({
               onChange={(e) => setAppliesToId(e.target.value)}
             >
               <option value="">Choose a species</option>
-              {SPECIES.map((s) => (
+              {ALL_SPECIES.map((s) => (
                 <option key={s} value={s}>{speciesLabel(s)}</option>
               ))}
             </select>

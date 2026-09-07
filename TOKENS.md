@@ -92,10 +92,17 @@ Sized for a phone used one-handed in a livestock building.
 
 **Do not use Material Symbols for species.** The icon set has no livestock, and
 every attempt in the mockups produced something wrong — a tractor for cattle, a
-piggy bank then a rat for pigs, a bug for poultry, a bee for sheep.
+piggy bank then a rat for pigs, a bug for the birds, a bee for sheep.
 
-Use five small custom SVG icons: cattle, goats, sheep, pigs, poultry. One icon
-per species, used identically everywhere it appears. Until they exist, use the
-species name as text rather than a misleading icon.
+Use eight small custom SVG icons: cattle, goats, sheep, pigs, hens, ducks,
+geese, turkeys (SPEC 18). One icon per species, used identically everywhere it
+appears. Until they exist, use the species name as text rather than a misleading
+icon.
+
+The four birds need to be told apart at chip size, which is the hard part of
+the set: a hen, a duck, a goose and a turkey drawn small all collapse towards
+the same blob. Silhouette alone will not carry it — bill and neck shape are
+where the difference survives shrinking. If a drawing cannot be distinguished
+at 20px, the text label is still the better answer.
 
 Material Symbols is fine for everything else — navigation, actions, status.

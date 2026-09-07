@@ -100,10 +100,10 @@ const SEED_SCHEDULES: SeedSchedule[] = [
   { name: "Deworming", species: "goats", type: "deworming", first_due_age_days: 30, repeat_every_days: 90 },
   { name: "Deworming", species: "sheep", type: "deworming", first_due_age_days: 30, repeat_every_days: 90 },
   { name: "Deworming", species: "pigs", type: "deworming", first_due_age_days: 60, repeat_every_days: 90 },
-  { name: "Newcastle vaccination", species: "poultry", type: "vaccination", first_due_age_days: 7, repeat_every_days: 90 },
+  { name: "Newcastle vaccination", species: "birds", type: "vaccination", first_due_age_days: 7, repeat_every_days: 90 },
   // SPEC 13.5 lists Gumboro as one-off, so it has no interval: given once at
   // fourteen days and never again.
-  { name: "Gumboro vaccination", species: "poultry", type: "vaccination", first_due_age_days: 14, repeat_every_days: null },
+  { name: "Gumboro vaccination", species: "birds", type: "vaccination", first_due_age_days: 14, repeat_every_days: null },
 ];
 
 export function seedScheduleId(index: number): string {

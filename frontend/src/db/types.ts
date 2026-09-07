@@ -2,7 +2,28 @@
  *  in IndexedDB and in Postgres, which is what lets a screen render identically
  *  whether or not there is a network. */
 
-export type Species = "cattle" | "goats" | "sheep" | "pigs" | "poultry";
+/**
+ * SPEC 18 — the four birds are separate species.
+ *
+ * `poultry` was one value covering hens, ducks, geese and turkeys, which are
+ * not one thing: they mature at different ages, so they reach market at
+ * different ages (SPEC 15), and a room holding hens is not a room holding
+ * geese. The single value made the sale-readiness target meaningless for three
+ * of the four, because whatever number it carried was right for at most one.
+ *
+ * The order here is the order they are shown in everywhere — the filter chips,
+ * the Animals list sections, the census. `ALL_SPECIES` in `domain/rules.ts` is
+ * the runtime list, and it is the only one: a screen must never write its own.
+ */
+export type Species =
+  | "cattle"
+  | "goats"
+  | "sheep"
+  | "pigs"
+  | "hens"
+  | "ducks"
+  | "geese"
+  | "turkeys";
 export type RecordKind = "animal" | "group";
 export type Sex = "male" | "female";
 export type Source = "born_here" | "bought" | "gift";
@@ -156,7 +177,19 @@ export interface Vet extends SyncFields {
 export type ScheduleAppliesTo = "animals" | "groups" | "both";
 
 /** A schedule may cover one species or every one of them (SPEC 13.2). */
-export type ScheduleSpecies = Species | "all";
+/**
+ * What a schedule covers: one species, every bird, or everything.
+ *
+ * `birds` exists because of SPEC 18. The Newcastle and Gumboro schedules were
+ * seeded against `poultry`, and when that became four species the choice was
+ * either four copies of each row or one row that says "the birds". Four copies
+ * is worse than it looks: changing the Newcastle interval would become four
+ * edits that must agree, and a farmer who changed only three would get a
+ * schedule that fires differently for ducks than for hens with nothing on
+ * screen explaining why. One row keeps one interval to edit, and keeps the
+ * seeded IDs stable so an edit already made survives the split (SPEC 16).
+ */
+export type ScheduleSpecies = Species | "birds" | "all";
 
 /**
  * SPEC 13.2 — a rule, not a date.

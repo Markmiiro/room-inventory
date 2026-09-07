@@ -65,3 +65,63 @@ export function recoverAnimalArrivalDates(
   }
   return recovered;
 }
+
+/**
+ * SPEC 18 — moving the `poultry` records onto `hens`.
+ *
+ * The enum lost a value, so every row still carrying it has to go somewhere.
+ * `hens` is the destination because it is the only one that can be defended: it
+ * is far and away the most common bird on a smallholding, and the one default
+ * the old value carried — a six-week sale target (SPEC 15.2) — is a broiler
+ * hen's, so a `poultry` row was already being treated as a hen everywhere the
+ * age mattered.
+ *
+ * It is still a guess for any bird that was not a hen, and the app must not
+ * pretend otherwise. That is why this returns the rows it changed rather than
+ * changing them quietly: the count is stored under `META.poultrySplit` and
+ * shown once on Animals, so the person who knows which pens hold ducks can go
+ * and correct them. A migration that silently retyped part of the flock and
+ * said nothing would be indistinguishable from data loss.
+ *
+ * Deleted rows are remapped too. They are soft-deleted, still readable under
+ * "Sold or dead" (SPEC 4.8), and leaving a value behind that no longer exists
+ * in the enum would break every screen that reads one back.
+ */
+export const POULTRY = "poultry";
+export const POULTRY_REPLACEMENT = "hens";
+
+export function recordsToRemapFromPoultry(records: Array<Pick<Record_, "id" | "species">>): string[] {
+  return records.filter((r) => (r.species as string) === POULTRY).map((r) => r.id);
+}
+
+/**
+ * The same remap for schedules, which go to `birds` rather than to `hens`.
+ *
+ * A schedule is a rule, not an animal. The Newcastle and Gumboro rows were
+ * written for poultry as a category and they still apply to all four birds, so
+ * narrowing them to hens would silently stop vaccinating the ducks — the exact
+ * kind of quiet gap SPEC 13.1 exists to close. The seeded IDs do not change, so
+ * any interval the farmer had already edited survives (SPEC 16).
+ */
+export function schedulesToRemapFromPoultry(
+  schedules: Array<{ id: string; species: string }>,
+): string[] {
+  return schedules.filter((s) => s.species === POULTRY).map((s) => s.id);
+}
+
+/**
+ * And for expenses tagged to a species (SPEC 3.10, 4.4).
+ *
+ * An expense with `applies_to: "species"` holds the species name in
+ * `applies_to_id`. Missing these would leave the feed bill for the birds
+ * allocated to a species no record has, so its whole cost would silently stop
+ * reaching any animal's estimated share (SPEC 4.4) — the figure would not go
+ * wrong loudly, it would just quietly drop out.
+ */
+export function expensesToRemapFromPoultry(
+  expenses: Array<{ id: string; applies_to: string; applies_to_id: string | null }>,
+): string[] {
+  return expenses
+    .filter((e) => e.applies_to === "species" && e.applies_to_id === POULTRY)
+    .map((e) => e.id);
+}

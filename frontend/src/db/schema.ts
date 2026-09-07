@@ -1,6 +1,12 @@
 import Dexie, { type Table } from "dexie";
 
-import { recoverAnimalArrivalDates } from "./backfill";
+import {
+  POULTRY_REPLACEMENT,
+  expensesToRemapFromPoultry,
+  recordsToRemapFromPoultry,
+  recoverAnimalArrivalDates,
+  schedulesToRemapFromPoultry,
+} from "./backfill";
 
 import type {
   Customer,
@@ -170,6 +176,89 @@ export class RoomInventoryDB extends Dexie {
       visitNotes: "id, visit_id, record_id",
       healthRecords: "id, record_id, date, next_due, schedule_id, visit_id",
     });
+
+    /**
+     * SPEC 18 — split `poultry` into hens, ducks, geese and turkeys.
+     *
+     * The enum lost a value, so this moves every row still carrying it:
+     * records onto `hens`, treatment schedules onto `birds`, and any expense
+     * tagged to the species onto `hens` alongside the records it allocates to.
+     * The three destinations differ on purpose and `backfill.ts` says why.
+     *
+     * Every change is queued for the server as well as written locally, for
+     * the reason version 8 gives: a record created offline before this shipped
+     * still has an outbox entry carrying `poultry`, and the server migration
+     * will have run long before it arrives. Without a correction queued behind
+     * it, that stale value would land on the server and be pulled straight
+     * back over the remapped one.
+     *
+     * Each queued entry keeps the row's existing `updated_at` rather than now,
+     * so a genuine later edit on another device still wins (SPEC 5.4). If the
+     * farmer has already corrected a pen of ducks on their phone, this must
+     * not overwrite it from the tablet.
+     *
+     * No table's shape changes, so `stores` names nothing.
+     */
+    this.version(10).upgrade(async (tx) => {
+      const queued: Array<{ entity: string; id: string; data: Record<string, unknown>; updated_at: string }> = [];
+
+      const records = (await tx.table("records").toArray()) as Record_[];
+      const movedIds = new Set(recordsToRemapFromPoultry(records));
+      for (const record of records) {
+        if (!movedIds.has(record.id)) continue;
+        await tx.table("records").put({ ...record, species: POULTRY_REPLACEMENT });
+        queued.push({
+          entity: "record",
+          id: record.id,
+          data: { species: POULTRY_REPLACEMENT },
+          updated_at: record.updated_at,
+        });
+      }
+
+      const schedules = (await tx.table("treatmentSchedules").toArray()) as TreatmentSchedule[];
+      const scheduleIds = new Set(
+        schedulesToRemapFromPoultry(schedules as Array<{ id: string; species: string }>),
+      );
+      for (const schedule of schedules) {
+        if (!scheduleIds.has(schedule.id)) continue;
+        await tx.table("treatmentSchedules").put({ ...schedule, species: "birds" });
+        queued.push({
+          entity: "treatment_schedule",
+          id: schedule.id,
+          data: { species: "birds" },
+          updated_at: schedule.updated_at,
+        });
+      }
+
+      const expenses = (await tx.table("expenses").toArray()) as Expense[];
+      const expenseIds = new Set(expensesToRemapFromPoultry(expenses));
+      for (const expense of expenses) {
+        if (!expenseIds.has(expense.id)) continue;
+        await tx.table("expenses").put({ ...expense, applies_to_id: POULTRY_REPLACEMENT });
+        queued.push({
+          entity: "expense",
+          id: expense.id,
+          data: { applies_to_id: POULTRY_REPLACEMENT },
+          updated_at: expense.updated_at,
+        });
+      }
+
+      for (const entry of queued) {
+        await tx.table("outbox").add({
+          op: "upsert",
+          ...entry,
+          queued_at: new Date().toISOString(),
+          attempts: 0,
+          last_error: null,
+          next_attempt_at: null,
+        });
+      }
+
+      // Kept so Animals can say how many were moved. It is a guess for any bird
+      // that was not a hen, and the only person who can tell is the one holding
+      // the phone.
+      await tx.table("meta").put({ key: "poultry_split_count", value: movedIds.size });
+    });
   }
 }
 
@@ -190,6 +279,12 @@ export const META = {
   /** When an export was last taken. SPEC 10 wants backups confirmed rather
    *  than assumed, and this is the device's half of that. */
   lastBackupAt: "last_backup_at",
+  /** How many records the SPEC 18 split moved from `poultry` onto `hens`, and
+   *  whether that has been shown. The count is kept because the remap is a
+   *  guess for any bird that was not a hen, and the person who knows which is
+   *  which has to be told there is something to check. */
+  poultrySplit: "poultry_split_count",
+  poultrySplitSeen: "poultry_split_seen",
 } as const;
 
 export async function getMeta<T>(key: string, fallback: T): Promise<T> {

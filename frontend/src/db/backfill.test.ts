@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { recoverAnimalArrivalDates } from "./backfill";
-import type { Move, Record_ } from "./types";
+import {
+  expensesToRemapFromPoultry,
+  recordsToRemapFromPoultry,
+  recoverAnimalArrivalDates,
+  schedulesToRemapFromPoultry,
+} from "./backfill";
+import type { Move, Record_, Species } from "./types";
 
 /**
  * Recovering the arrival dates `createRecord` used to discard for animals.
@@ -119,5 +124,89 @@ describe("what it deliberately leaves alone", () => {
   it("does not read one record's placement onto another", () => {
     const other = move({ record_id: "rec-2" });
     expect(recoverAnimalArrivalDates([record()], [other])).toEqual([]);
+  });
+});
+
+/**
+ * SPEC 18 — moving what is left of `poultry`.
+ *
+ * Three kinds of row carry the value and they do not all go to the same place.
+ * The distinction is the whole point of these tests: sending the schedules to
+ * `hens` along with the records would silently stop vaccinating the ducks, and
+ * leaving the expenses behind would drop the birds' feed bill out of every
+ * estimated cost share without anything going visibly wrong.
+ */
+describe("the poultry split", () => {
+  it("picks out the records still on poultry", () => {
+    const ids = recordsToRemapFromPoultry([
+      { id: "a", species: "poultry" as Species },
+      { id: "b", species: "cattle" },
+      { id: "c", species: "poultry" as Species },
+    ]);
+    expect(ids).toEqual(["a", "c"]);
+  });
+
+  it("leaves every other species alone", () => {
+    const ids = recordsToRemapFromPoultry([
+      { id: "a", species: "hens" },
+      { id: "b", species: "ducks" },
+      { id: "c", species: "pigs" },
+    ]);
+    expect(ids).toEqual([]);
+  });
+
+  /**
+   * Sold and dead records keep their history and stay readable under the "Sold
+   * or dead" filter (SPEC 4.8). Leaving a value behind that is no longer in the
+   * enum would break every screen that reads one back.
+   */
+  it("moves soft-deleted and sold records too", () => {
+    const ids = recordsToRemapFromPoultry([
+      { id: "a", species: "poultry" as Species },
+      { id: "b", species: "poultry" as Species },
+    ]);
+    expect(ids).toEqual(["a", "b"]);
+  });
+
+  it("is safe to run twice", () => {
+    // After the first pass every row says `hens`, so a second finds nothing.
+    expect(recordsToRemapFromPoultry([{ id: "a", species: "hens" }])).toEqual([]);
+  });
+
+  it("picks out the schedules still on poultry", () => {
+    const ids = schedulesToRemapFromPoultry([
+      { id: "s1", species: "poultry" },
+      { id: "s2", species: "cattle" },
+      { id: "s3", species: "all" },
+    ]);
+    expect(ids).toEqual(["s1"]);
+  });
+
+  it("picks out expenses tagged to the poultry species", () => {
+    const ids = expensesToRemapFromPoultry([
+      { id: "e1", applies_to: "species", applies_to_id: "poultry" },
+      { id: "e2", applies_to: "species", applies_to_id: "pigs" },
+      { id: "e3", applies_to: "farm", applies_to_id: null },
+    ]);
+    expect(ids).toEqual(["e1"]);
+  });
+
+  /**
+   * A room id could in principle read "poultry" only by coincidence, but the
+   * scope is what decides the meaning of the column, so it is what gets
+   * checked. Matching on the value alone would rewrite a room's id.
+   */
+  it("ignores a room-scoped expense whatever its id says", () => {
+    const ids = expensesToRemapFromPoultry([
+      { id: "e1", applies_to: "room", applies_to_id: "poultry" },
+    ]);
+    expect(ids).toEqual([]);
+  });
+
+  it("ignores a farm-wide expense", () => {
+    const ids = expensesToRemapFromPoultry([
+      { id: "e1", applies_to: "farm", applies_to_id: null },
+    ]);
+    expect(ids).toEqual([]);
   });
 });

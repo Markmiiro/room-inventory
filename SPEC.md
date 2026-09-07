@@ -113,7 +113,7 @@ can be either — chosen per record, not fixed per species.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `kind` | `animal` \| `group` | yes | Immutable after creation |
-| `species` | enum | yes | `cattle`, `goats`, `sheep`, `pigs`, `poultry` |
+| `species` | enum | yes | `cattle`, `goats`, `sheep`, `pigs`, `hens`, `ducks`, `geese`, `turkeys`. See 18 |
 | `tag` | string | yes | Tag number for animals, group name for groups |
 | `breed` | string | no | Free text |
 | `sex` | `male` \| `female` | animals only | |
@@ -251,8 +251,9 @@ After a group split, each resulting record has its own independent move history.
 - **Occupancy** = sum of `head_count` across active records currently in the room.
 - Displayed as `"45 of 53"`. **Never as a percentage.** Percentages do not appear
   anywhere in this app.
-- **Type is derived.** One species present → that species. Two or more → `Mixed`.
-  None → `Empty`. If `is_isolation`, the chip reads `Isolation` regardless.
+- **Type is derived.** One species present → that species. Two or more → `Mixed`,
+  except that two or more *birds* and nothing else → `Birds` (see 18). None →
+  `Empty`. If `is_isolation`, the chip reads `Isolation` regardless.
 - **Over capacity** when occupancy exceeds capacity: count in alert red, red
   capacity bar, and a chip reading "Over capacity". It **warns, never blocks** —
   the animals are physically there whether the app approves or not.
@@ -586,7 +587,7 @@ Calendar, Money and More are the five.
 Do not reproduce these:
 
 - **Species icons are wrong throughout.** Material Symbols has no livestock, so the
-  mockups show a tractor for cattle, a rat for pigs, a bug for poultry, a bee for
+  mockups show a tractor for cattle, a rat for pigs, a bug for the birds, a bee for
   sheep. See TOKENS.md.
 - **Sample data uses banned words** — "Pasture A", "Barn 2", "Pen 3" in dropdown
   options. Replace with the ten real rooms.
@@ -685,8 +686,8 @@ are starting suggestions. Check them against your vet's advice for your area."*
 | Goats | Deworming | 1 month | every 3 months |
 | Sheep | Deworming | 1 month | every 3 months |
 | Pigs | Deworming | 2 months | every 3 months |
-| Poultry | Newcastle vaccination | 7 days | every 3 months |
-| Poultry | Gumboro vaccination | 14 days | one-off |
+| All birds | Newcastle vaccination | 7 days | every 3 months |
+| All birds | Gumboro vaccination | 14 days | one-off |
 
 All are editable and archivable from day one.
 
@@ -791,11 +792,20 @@ Suggested seeded defaults, editable:
 
 | Species | Target |
 |---|---|
-| Poultry (broiler) | 6 weeks |
+| Hens (broiler) | 6 weeks |
+| Ducks | 8 weeks |
+| Geese | 12 weeks |
+| Turkeys | 16 weeks |
 | Pigs | 6 months |
 | Goats | 12 months |
 | Sheep | 12 months |
 | Cattle | 24 months |
+
+The four bird figures are the reason `poultry` had to be split (18). One value
+could carry only one number, and the one it carried — six weeks — is a broiler
+hen's. A goose held to it would have been called ready to sell at roughly a
+third of its market age, every time, with nothing on screen suggesting the
+figure was about a different bird.
 
 ### 15.3 Behaviour
 
@@ -867,3 +877,118 @@ Never blocks or prompts a sale. It is information, not instruction.
   until it does.
 - **Feed quantity.** Feed is tracked as cost, not as bags in and out. You know
   what you spent, not what you used.
+
+---
+
+## 18. The four birds
+
+### 18.1 The problem
+
+`poultry` was one species covering hens, ducks, geese and turkeys. They are not
+one thing. They mature at different rates, so they reach market at different
+ages, and the single seeded sale target of six weeks (15.2) is a broiler hen's —
+right for at most one of the four and quietly wrong for the rest. A goose held
+to it is called ready to sell at roughly a third of its market age, every time,
+and nothing on screen suggests the number was about a different bird.
+
+The same flattening ran through the rest of the app. A room of hens and a room
+of geese both read "Poultry". The Animals filter could not narrow to ducks. Any
+money figure broken down by species lumped the lot together.
+
+### 18.2 The enum
+
+`cattle`, `goats`, `sheep`, `pigs`, `hens`, `ducks`, `geese`, `turkeys`.
+
+Mammals first, then birds, each in that order. **This order is the display order
+everywhere** — filter chips, list sections, the census — and there is exactly one
+runtime list of it, `ALL_SPECIES` in `domain/rules.ts`. Five screens each carried
+their own copy before, which is five places to forget when the enum changes, and
+precisely how a filter row ends up silently missing a species that records can
+still be created with. Screens import the list; they never write one.
+
+`MAMMAL_SPECIES` is derived by subtracting the birds, so adding a species cannot
+leave it behind.
+
+### 18.3 Migrating the existing rows
+
+Three kinds of row carried the retired value, and they do not all go to the same
+place.
+
+| Row | Becomes | Why |
+|---|---|---|
+| Record | `hens` | The commonest bird, and the one the old six-week target already described |
+| Treatment schedule | `birds` | A rule about the category, which still applies to all four |
+| Expense tagged to the species | `hens` | Follows the records it allocates to |
+
+Sending the schedules to `hens` with the records would **silently stop
+vaccinating the ducks** — the exact quiet gap 13.1 exists to close. Leaving the
+expenses behind would allocate the birds' feed bill to a species no record has,
+so its whole cost would drop out of every estimated share (4.4): not visibly
+wrong, just gone.
+
+Soft-deleted, sold and dead records are migrated too. They stay readable under
+the "Sold or dead" filter (4.8), and a value no longer in the enum breaks every
+screen that reads one back.
+
+**`seq` is advanced; `updated_at` is not.** The first is what makes an already
+synced device pull the correction. The second is what stops the migration
+winning a race it has no business winning: these rows merge last-write-wins per
+field (5.4), so a farmer who has already corrected a pen of ducks by hand keeps
+that correction.
+
+**Moving a record to `hens` is a guess**, and the app must not pretend otherwise.
+The number of rows moved is reported in the server migration's output and stored
+on the device, and the Animals screen says it once: *"N records moved from
+Poultry to Hens."* A migration that silently retyped part of the flock and
+mentioned it nowhere would be indistinguishable from data loss — the records
+would still be there, saying the wrong thing, with nothing ever prompting anyone
+to look.
+
+### 18.4 `birds` as a schedule scope
+
+`TreatmentSchedule.species` accepts `all`, one species, or `birds`.
+
+The alternative was four copies of every bird schedule, which is a worse trap
+than the one being fixed: changing the Newcastle interval becomes four edits
+that have to agree, and a farmer who updates three of them gets a schedule
+firing differently for ducks than for hens with nothing on screen explaining
+why. One row keeps one interval to edit, and keeps the seeded IDs stable, so an
+interval already edited survives the split (16).
+
+It is labelled **"All birds"** rather than "Birds", because on the manage
+schedules screen the four are also choosable individually and the row needs to
+read as a rule about a group rather than as a species alongside Hens.
+
+### 18.5 A room of birds is not a mixed room
+
+4.2 now reads: two or more species → `Mixed`, **unless every species present is
+a bird**, in which case `Birds`.
+
+Without this the split would have quietly relabelled rooms. A room that read
+"Poultry" yesterday holds hens and ducks today and would read "Mixed" — the word
+for cattle sharing with goats, a warning that unlike animals are together. Four
+kinds of bird in one room is the ordinary case it was never about. Mixed still
+means mixed for everything else, including one bird species housed with a mammal.
+
+### 18.6 Eight species, six chips
+
+The Animals filter row would have gone from six chips to nine. On a 390px screen
+every one of them is off the edge, reachable only by dragging a horizontal strip
+that gives no sign there is anything further along — the species at the end stop
+existing for anyone who does not think to swipe.
+
+So the birds collapse into one chip, and the four open in a second row beneath it
+when chosen:
+
+```
+All · Cattle · Goats · Sheep · Pigs · Birds
+        All birds · Hens · Ducks · Geese · Turkeys     ← only while Birds is chosen
+```
+
+Six chips on the top row, one fewer than before the split. The Birds chip stays
+active while one of the four is selected, so the second row never appears to
+belong to nothing, and it never appears at all for a farm that keeps no birds.
+
+`birds` is a real filter value, not just a heading: "show me the birds" is worth
+asking on a farm keeping four kinds, and the old single `poultry` value could
+answer it only by accident.
