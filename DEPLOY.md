@@ -210,12 +210,38 @@ old rows will push them straight back.
 anything a device has not yet synced, and it is the only export this app can
 restore (More → Restore from a backup).
 
-Then from the server, which keeps a copy of everything that *had* synced:
+Then from the server, which keeps a copy of everything that *had* synced.
+
+**Point it at the public URL, not the one `railway run` gives you.** Railway's
+`DATABASE_URL` names `postgres.railway.internal`, which only resolves inside
+Railway's own network — from a laptop it fails as a DNS or connection timeout
+that looks like the database being down. The public proxy URL is what works from
+outside:
+
+```bash
+railway login
+railway link                      # choose the project, environment and service
+railway variables | grep -i database_public_url
+```
+
+If there is no `DATABASE_PUBLIC_URL`, turn on the TCP proxy for the Postgres
+service (its Settings → Networking) and take the URL from there.
 
 ```bash
 cd backend
-railway run python -m scripts.reset_data --export-only
+export DATABASE_URL='postgresql://postgres:…@…proxy.rlwy.net:PORT/railway'
+.venv/bin/python -m scripts.reset_data --export-only
 ```
+
+Paste the URL as Railway gives it — `app/config.py` rewrites the bare
+`postgresql://` scheme to `postgresql+psycopg://` on the setting both the app
+and Alembic read, so there is nothing to fix by hand. Add `?sslmode=require` if
+the connection is refused.
+
+**Setting `DATABASE_URL` in the command's environment beats `backend/.env`**,
+which is what makes this safe to run from a working checkout. Forget it, though,
+and the `.env` wins silently and you are aimed at your development database —
+which is the reason for `--expect-database` below.
 
 It writes `backend/backups/room-inventory-server-<timestamp>.json` — every
 table, every row, stamped with the Alembic revision it came from, with produce
@@ -229,11 +255,14 @@ device export is the one that restores.
 ## 2. Wipe the server
 
 ```bash
-# Report first. Deletes nothing, writes nothing.
-railway run python -m scripts.reset_data
+cd backend
+export DATABASE_URL='postgresql://postgres:…@…proxy.rlwy.net:PORT/railway'
+
+# Report first. Deletes nothing, writes nothing. Check the database it names.
+.venv/bin/python -m scripts.reset_data
 
 # Then, and only with the flag:
-railway run python -m scripts.reset_data --confirm --expect-database railway
+.venv/bin/python -m scripts.reset_data --confirm --expect-database railway
 ```
 
 With no `--confirm` it prints what it would delete, by table and count, and
@@ -274,7 +303,123 @@ an upsert rather than a duplicate — and carries on. `updated_at` is deliberate
 left alone: it is what the per-field merge reads (SPEC 5.4), and the seeds are
 backdated on purpose so any renaming the farm has done still wins.
 
-## 4. Clear every device
+## 4. If you can only reach the console
+
+Prefer the script. It is exact where this is approximate, it derives its table
+list from the models rather than the catalogue, and it writes the export for you.
+Use the SQL below only when the database is reachable from Railway's query
+console and nothing else — no CLI, no proxy — because then `pg_dump` and the
+script are both out of reach too.
+
+The SQL is dynamic on purpose: it builds the table list from the catalogue, so it
+cannot miss a table the way a hand-typed list did (see the stale snippet above).
+All three statements below have been run against a database at revision `0012`
+with a farm in it, and they leave the same state the script does.
+
+**First, the counts you are about to destroy** — exact, not the planner's
+estimates:
+
+```sql
+select
+  table_name,
+  (xpath(
+    '/row/c/text()',
+    query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')
+  ))[1]::text::bigint as rows
+from information_schema.tables
+where table_schema = 'public' and table_type = 'BASE TABLE'
+order by table_name;
+```
+
+**Then the export.** One JSON value, credentials left out, for copying out of the
+console into a file. `set time zone 'UTC'` first, or the timestamps come out in
+the console's zone:
+
+```sql
+set time zone 'UTC';
+
+select jsonb_pretty(jsonb_object_agg(t.table_name, coalesce(d.data, '[]'::jsonb)))
+from information_schema.tables t
+cross join lateral (
+  select query_to_xml(
+           format('select coalesce(jsonb_agg(to_jsonb(x)), ''[]''::jsonb) as j from %I.%I x',
+                  t.table_schema, t.table_name),
+           false, true, '') as x
+) q
+cross join lateral (
+  select ((xpath('/row/j/text()', q.x))[1]::text)::jsonb as data
+) d
+where t.table_schema = 'public'
+  and t.table_type = 'BASE TABLE'
+  and t.table_name not in ('users', 'refresh_tokens', 'alembic_version');
+```
+
+**Then the wipe.** One transaction, so a failure part-way leaves the farm as it
+was:
+
+```sql
+begin;
+
+-- 1. Empty every data table except the four holding seeded rows, and except
+--    `users` (a credential) and `alembic_version` (the schema's bookkeeping).
+--    The list comes from the catalogue, so a table added later is included.
+--    CASCADE settles the foreign-key order.
+do $$
+declare targets text;
+begin
+  select string_agg(format('%I', c.relname), ', ')
+    into targets
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public'
+    and c.relkind = 'r'
+    and c.relname not in (
+      'alembic_version', 'users',
+      'rooms', 'treatment_schedules', 'stores', 'produce_types'
+    );
+  raise notice 'truncating: %', targets;
+  execute format('truncate table %s cascade', targets);
+end $$;
+
+-- 2. The four seeded tables: keep only the fixed ids the migrations wrote.
+--    Prefix matching rather than the exact id list — a ULID cannot begin with
+--    twenty-two zeros, so nothing the farm created can match. The script is
+--    exact; this is the console's approximation of it.
+delete from rooms               where id not like '0000000000000000000000R0%';
+delete from treatment_schedules where id not like '0000000000000000000000S0%';
+delete from stores              where id not like '0000000000000000000000T0%';
+delete from produce_types       where id not like '0000000000000000000000P0%';
+
+-- 3. Re-stamp the survivors above the old head, so a device holding an old
+--    cursor pulls them again rather than never seeing them. Never `setval` to
+--    a lower number: that is the silent failure this whole section is about.
+update rooms               set seq = nextval('global_seq');
+update treatment_schedules set seq = nextval('global_seq');
+update stores              set seq = nextval('global_seq');
+update produce_types       set seq = nextval('global_seq');
+
+commit;
+```
+
+**Then check it**, which should read 10, 8, 2, 3 with nothing else left and a
+sequence above where it started:
+
+```sql
+select
+  (select count(*) from rooms)               as rooms,
+  (select count(*) from treatment_schedules) as schedules,
+  (select count(*) from stores)              as stores,
+  (select count(*) from produce_types)       as produce_types,
+  (select count(*) from records)             as records,
+  (select min(seq) from rooms)                as lowest_seed_seq,
+  (select last_value from global_seq)         as head;
+```
+
+`lowest_seed_seq` must be greater than the head the first query showed. If it is
+not, the re-stamp did not run, and a device that was not wiped will never see
+these rows.
+
+## 5. Clear every device
 
 A wiped server and a full device is not a fresh start, and the reason is worth
 being precise about: **this reset is a hard delete, and a hard delete is
