@@ -1820,3 +1820,85 @@ them, once, on the way in.
 Births are included in the device export, and `schema_version` is bumped
 alongside it: a birth is the only record of where an animal born here came from,
 so a restore without them leaves offspring with a date of birth and no mother.
+
+---
+
+## 23. Clearing a device
+
+### 23.1 Why it is in the app
+
+Wiping the server is a script (`backend/scripts/reset_data.py`). Wiping a device
+was four paths across two platforms — Safari's Website Data, an iOS Home Screen
+app, Chrome's Site settings, an Android installed app — and **one of them is not
+reachable from the browser's own settings at all**. A PWA added to the Home
+Screen keeps its own store, so clearing Safari leaves the farm intact and the
+app still full, which reads as the wipe having failed rather than having missed
+a copy.
+
+So it is a control in **More → Data**, under the two that can save what it
+destroys. A button in the app cannot be missed, and it can say what it is about
+to do in words the settings screens cannot.
+
+### 23.2 What it clears
+
+Every recorded row on the device: records, moves, births, sales, deaths, health
+records, purchases, vet visits, visit notes, expenses, expense categories,
+customers, vets, and every stock intake, outtake and count. The outbox goes with
+them.
+
+The table list is taken from Dexie's own table list rather than typed out, for
+the reason 22.8's server counterpart gives: a table added later is cleared by
+existing rather than by somebody remembering.
+
+### 23.3 What it keeps, and why
+
+- **The seeded rows**, at their fixed ids — the ten rooms, eight treatment
+  schedules, two stores, three produce types. Deleting them would not lose data;
+  it would produce a *second* set of them on the next sync (6.10), which looks
+  like a mistake the farm made rather than one the app made. It also means the
+  app is usable the moment the clear finishes: no blank screen, no setup wizard.
+- **`device_id`**. It breaks ties in conflict resolution (5.4), and a device
+  that changed identity every time it was cleared would merge unpredictably.
+- **The seeded flags** in `meta`, since the rows they describe are staying.
+
+The **pull cursor is reset to zero**. Left where it was, the device would never
+re-pull what it had just deleted, and the two sides would disagree for ever with
+nothing on screen saying so. At zero the next sync asks for everything, and the
+device ends up holding exactly what the server holds — which is the only state
+worth calling cleared.
+
+Tokens are dropped too. They belong to the session the device had rather than to
+the next one; with auth on, the next sync asks for the password again. SPEC 8's
+rule that an auth failure never wipes local data is untouched — here the person
+asked for precisely that.
+
+### 23.4 What it does not do
+
+**It does not clear the server**, and the confirmation says so. A client can
+soft-delete a state entity but not an event — `deleted_at` is not writable on an
+event (5.2's `WRITABLE`) — so a device cannot wipe the farm for everybody, and
+adding an endpoint that could would be a "delete everything" button standing
+open on the public internet whenever `AUTH_ENABLED` is false (21.2).
+
+So if the server still holds records, the next sync brings them back to the
+cleared device. That is the sync model working, not a fault, and somebody
+expecting a clean slate has to be told before they tap rather than after.
+
+A full reset is therefore both halves: **the script on the server, the button on
+each device**. Whichever is done first, nothing should sync in the gap.
+
+### 23.5 The confirmation
+
+Three losses, each a different kind, each stated:
+
+1. **Unsent changes are gone for good.** Everything else can come back from the
+   server; these never reached it. They are *counted* rather than described —
+   "11 changes have not reached the server yet".
+2. **The server is untouched** (23.4).
+3. **The seeded rows stay** (23.3).
+
+The word `DELETE` has to be typed. This is the only control in the app that
+destroys records outright rather than marking them sold or dead, and a mis-tap
+on a phone in a pocket should not be able to reach it. Afterwards it reports
+what went, by table and count — the same report the server script prints, for
+the same reason: a wipe that says only "done" is a wipe nobody can check.

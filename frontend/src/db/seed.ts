@@ -31,6 +31,16 @@ const SEED_ROOMS = [
 const ISOLATION_CODE = "R4";
 const DEFAULT_CAPACITY = 20;
 
+/**
+ * How many rows each seed writes.
+ *
+ * Exported so that anything needing to name the seeded ids — `db/clear.ts`
+ * keeps them through a device wipe (SPEC 23) — counts them from the lists
+ * themselves rather than hardcoding a number that would go stale the moment a
+ * schedule is added.
+ */
+export const SEED_ROOM_COUNT = SEED_ROOMS.length;
+
 export function seedRoomId(index: number): string {
   return `${ROOM_ID_PREFIX}${String(index).padStart(2, "0")}`;
 }
@@ -106,6 +116,8 @@ const SEED_SCHEDULES: SeedSchedule[] = [
   { name: "Gumboro vaccination", species: "birds", type: "vaccination", first_due_age_days: 14, repeat_every_days: null },
 ];
 
+export const SEED_SCHEDULE_COUNT = SEED_SCHEDULES.length;
+
 export function seedScheduleId(index: number): string {
   return `${SCHEDULE_ID_PREFIX}${String(index).padStart(2, "0")}`;
 }
@@ -176,6 +188,9 @@ const SEED_STORES = [
 
 /** Alphabetical, which is also the order they are displayed in. */
 const SEED_PRODUCE_TYPES = ["Beans", "Coffee", "Maize"];
+
+export const SEED_STORE_COUNT = SEED_STORES.length;
+export const SEED_PRODUCE_TYPE_COUNT = SEED_PRODUCE_TYPES.length;
 
 export function seedStoreId(index: number): string {
   return `${STORE_ID_PREFIX}${String(index).padStart(2, "0")}`;

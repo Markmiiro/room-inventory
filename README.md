@@ -84,7 +84,7 @@ SPEC 21.
 
 ```bash
 cd backend  && .venv/bin/python -m pytest      # 136 tests, needs a local PostgreSQL
-cd frontend && npm test                        # 488 tests
+cd frontend && npm test                        # 503 tests
 ```
 
 The suite shells out to `alembic`, so run it with the virtualenv on `PATH`
@@ -411,6 +411,24 @@ file is for reading and re-entering; the device-side export below is the one
 that restores. `DEPLOY.md` has the full runbook, including how to clear an
 iPhone and an Android phone — and a home-screen-installed PWA, whose storage is
 separate from the browser's and is the copy people miss.
+
+### Clearing a device
+
+**More → Data → Clear this device** (SPEC 23). It deletes every recorded row on
+the phone, keeps the seeded rows at their fixed ids, resets the pull cursor to
+zero and asks for the word `DELETE` first.
+
+It exists because the alternative was walking somebody through four different
+settings screens across two platforms, one of which — the storage of a PWA added
+to the Home Screen — is not reachable from the browser's own settings at all. A
+button in the app cannot be missed.
+
+It deliberately **does not clear the server**: a client can soft-delete a state
+entity but not an event, so no device can wipe the farm for everybody, and an
+endpoint that could would stand open on the internet whenever `AUTH_ENABLED` is
+false. A full reset is both halves — `scripts/reset_data.py` on the server, this
+button on each device — and the confirmation says so, along with how many unsent
+changes are about to be lost for good.
 
 ### Restoring a backup
 

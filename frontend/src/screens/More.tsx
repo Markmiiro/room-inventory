@@ -21,6 +21,14 @@ import {
   type ImportSummary,
 } from "../db/backup";
 import { runBackup } from "../db/backup";
+import {
+  clearDeviceData,
+  clearedTables,
+  pendingChangeCount,
+  totalCleared,
+  type ClearSummary,
+} from "../db/clear";
+import { syncEngine } from "../sync/engine";
 import { useAlerts } from "../db/useAlerts";
 import { formatDate } from "../domain/format";
 
@@ -104,6 +112,9 @@ export function MoreScreen() {
       <Group title="Data">
         <BackupRow />
         <RestoreRow />
+        {/* SPEC 23 — last in the group, after the two that can save the data it
+            destroys. */}
+        <ClearDeviceRow />
       </Group>
     </div>
   );
@@ -313,5 +324,190 @@ function Row({
       </span>
       <ChevronIcon className="w-5 h-5 text-text-muted shrink-0" />
     </Link>
+  );
+}
+
+
+/**
+ * Clear this device. SPEC 23.
+ *
+ * It is here rather than in the phone's settings because the phone's settings
+ * are four different paths on two platforms, and one of them — the storage of
+ * an app added to the Home Screen — is not reachable from the browser's own
+ * settings at all. That is the copy people miss, and a button in the app cannot
+ * be missed.
+ *
+ * Three things the confirmation has to say, because each is a different kind of
+ * loss:
+ *
+ * * Unsent changes are gone for good. Everything else can come back from the
+ *   server; those never reached it.
+ * * The server is not touched. A device cannot wipe the farm for everybody —
+ *   there is no endpoint for it — so if the server still holds records, the
+ *   next sync brings them back to this device. That is the truth, not a bug,
+ *   and somebody expecting a clean slate needs to hear it before tapping.
+ * * The ten rooms and the other seeded rows stay. Deleting them would not lose
+ *   data; it would produce a second set of ten on the next sync.
+ *
+ * The typed word is not ceremony. This is the one control in the app that
+ * destroys records outright rather than marking them sold or dead, and a
+ * mis-tap on a phone in a pocket should not be able to reach it.
+ */
+function ClearDeviceRow() {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [pending, setPending] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<ClearSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function begin() {
+    setDone(null);
+    setError(null);
+    setTyped("");
+    setPending(await pendingChangeCount());
+    setOpen(true);
+  }
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      const summary = await clearDeviceData();
+      setDone(summary);
+      setOpen(false);
+      // The cursor is back at zero, so this pulls whatever the server actually
+      // holds — which is how the device ends up agreeing with it rather than
+      // merely looking empty.
+      syncEngine.requestSync();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="p-4">
+      <div className="flex items-start gap-3">
+        <span className="shrink-0 mt-0.5 text-alert">
+          <WarningIcon className="w-6 h-6" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-body-lg font-semibold">Clear this device</p>
+          <p className="text-body-md text-text-muted">
+            Deletes every record held on this phone — animals, moves, births,
+            sales, treatments, expenses and stock. The ten rooms and the other
+            starting rows stay.
+          </p>
+        </div>
+      </div>
+
+      <button type="button" className="btn-quiet w-full mt-3" onClick={() => void begin()}>
+        Clear this device…
+      </button>
+
+      {done && (
+        <div className="mt-3 rounded-lg bg-success text-success-text p-3">
+          <p className="text-body-md font-semibold">
+            Cleared. {totalCleared(done)} {totalCleared(done) === 1 ? "row" : "rows"} deleted from
+            this device.
+          </p>
+          {clearedTables(done).length > 0 && (
+            <ul className="mt-2 flex flex-col gap-0.5">
+              {clearedTables(done).map(([table, count]) => (
+                <li key={table} className="data-label">
+                  {table} · {count}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-body-md mt-2">
+            Syncing now. If the server still holds records, they will come back —
+            clear the server too, or this device will simply fetch them again.
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <p className="mt-3 rounded-lg bg-alert-bg text-alert-text text-body-md p-3">{error}</p>
+      )}
+
+      {open && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center sm:p-4 overflow-y-auto">
+          <div
+            className="card w-full max-w-lg p-4 sm:p-6 max-h-[92vh] overflow-y-auto"
+            role="dialog"
+            aria-label="Clear this device"
+          >
+            <h2 className="text-headline-sm text-primary">Clear this device?</h2>
+
+            <p className="text-body-md mt-3">
+              Every record on this phone is deleted: animals and groups, moves,
+              births, sales, deaths, treatments, vet visits, expenses, customers,
+              vets and every stock entry. There is no undo.
+            </p>
+
+            {pending !== null && pending > 0 && (
+              <p className="mt-3 rounded-lg bg-alert-bg text-alert-text text-body-md p-3">
+                <span className="font-semibold">
+                  {pending} {pending === 1 ? "change has" : "changes have"} not reached the server
+                  yet.
+                </span>{" "}
+                Those are only on this device, so they are lost for good. Run a
+                backup first if you want them.
+              </p>
+            )}
+
+            <p className="text-body-md text-text-muted mt-3">
+              This does not clear the server. If the server still holds records,
+              the next sync brings them back to this device — clearing both is
+              what makes a fresh start.
+            </p>
+            <p className="text-body-md text-text-muted mt-2">
+              The ten rooms, the treatment schedules, the stores and the produce
+              types stay, with their own identities. Deleting those would create a
+              second set of them the next time this device synced.
+            </p>
+
+            <label className="data-label block mt-4 mb-1" htmlFor="clear-confirm">
+              Type DELETE to confirm
+            </label>
+            <input
+              id="clear-confirm"
+              className="field font-mono"
+              value={typed}
+              autoComplete="off"
+              onChange={(e) => setTyped(e.target.value)}
+            />
+
+            {error && (
+              <p className="mt-3 rounded-lg bg-alert-bg text-alert-text text-body-md p-3">
+                {error}
+              </p>
+            )}
+
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                className="btn-quiet flex-1"
+                onClick={() => setOpen(false)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-secondary flex-1"
+                disabled={busy || typed.trim().toUpperCase() !== "DELETE"}
+                onClick={() => void confirm()}
+              >
+                {busy ? "Clearing…" : "Clear it"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
