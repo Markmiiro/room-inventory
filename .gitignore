@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .env
 reference-only/extracted/
+# Exports taken by scripts/reset_data.py. They are a copy of the farm's
+# records — never committed.
+backend/backups/

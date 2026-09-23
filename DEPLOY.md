@@ -161,20 +161,177 @@ limiter is on the route either way.
 whose sequence is behind will hand out `seq` values clients have already seen,
 and those changes will never be pulled. After any restore:
 
+This was a hand-written list of tables, and it had gone stale: it was missing
+`treatment_schedules`, `vet_visits`, `visit_notes`, `births` and the five store
+tables, so following it set the sequence *below* rows that already existed —
+which is the same silent failure it was written to prevent. Use this instead. It
+finds every table with a `seq` column, so a table added later is covered, and it
+takes the greater of that and the sequence's current value, so it can only ever
+move the sequence forward:
+
 ```sql
-select setval('global_seq', (select max(seq) from (
-  select max(seq) as seq from rooms union all
-  select max(seq) from records union all select max(seq) from moves union all
-  select max(seq) from purchases union all select max(seq) from health_records union all
-  select max(seq) from sales union all select max(seq) from deaths union all
-  select max(seq) from expenses union all select max(seq) from expense_categories union all
-  select max(seq) from customers union all select max(seq) from vets
-) t));
+do $$
+declare
+  t record;
+  highest bigint := 0;
+  found bigint;
+begin
+  for t in
+    select table_name from information_schema.columns
+    where table_schema = 'public' and column_name = 'seq'
+  loop
+    execute format('select coalesce(max(seq), 0) from %I', t.table_name) into found;
+    if found > highest then highest := found; end if;
+  end loop;
+  perform setval('global_seq', greatest(highest, (select last_value from global_seq)));
+end $$;
 ```
+
+`backend/scripts/reset_data.py` does the same thing in Python, and
+`tests/test_reset.py` asserts the sequence never goes backwards — see **Starting
+the records again** below.
 
 **Room ids are fixed in two places.** `backend/alembic/versions/0002_seed_rooms.py`
 and `frontend/src/db/seed.ts` must keep the same ten ids, or a device that
 seeded offline will produce twenty rooms on its first sync.
+
+---
+
+# Starting the records again
+
+Wiping a farm's records is not a `TRUNCATE`, and the two things it is easy to get
+wrong both fail silently. `backend/scripts/reset_data.py` does it; the sequence
+below is server first, then every device, because a device that still holds the
+old rows will push them straight back.
+
+## 1. Take the exports
+
+**From each phone, in the app: More → Backup.** That file is the only copy of
+anything a device has not yet synced, and it is the only export this app can
+restore (More → Restore from a backup).
+
+Then from the server, which keeps a copy of everything that *had* synced:
+
+```bash
+cd backend
+railway run python -m scripts.reset_data --export-only
+```
+
+It writes `backend/backups/room-inventory-server-<timestamp>.json` — every
+table, every row, stamped with the Alembic revision it came from, with produce
+weights as strings so the `Numeric` columns do not round on the way out
+(SPEC 20.8). Move it somewhere off the machine.
+
+**There is no import route yet.** SPEC 7 names `POST /import/json`; it is not
+built. So the server export is for reading and for re-entering by hand. The
+device export is the one that restores.
+
+## 2. Wipe the server
+
+```bash
+# Report first. Deletes nothing, writes nothing.
+railway run python -m scripts.reset_data
+
+# Then, and only with the flag:
+railway run python -m scripts.reset_data --confirm --expect-database railway
+```
+
+With no `--confirm` it prints what it would delete, by table and count, and
+stops. `--expect-database` refuses unless the name matches, which is worth using
+on a host where `DATABASE_URL` comes from the environment and you cannot see
+what you are aimed at. A `--confirm` run always writes the export first, and
+`--no-export` is refused alongside it.
+
+What it keeps, and why:
+
+| Kept | Reason |
+|---|---|
+| The ten rooms, eight treatment schedules, two stores, three produce types | Their ids are fixed in the migrations *and* in `frontend/src/db/seed.ts`. Delete them and the next device to sync creates a second set (SPEC 6.10) |
+| `users` | A password is a credential, not a record. Wiping it locks the farm out of its own API |
+| `alembic_version` | The schema's own bookkeeping. Clearing it makes the next deploy re-run every migration |
+
+`refresh_tokens` **is** cleared, so with `AUTH_ENABLED=true` every device is
+asked for the password again. No local data is touched by that (SPEC 8).
+
+The table list is derived from the SQLAlchemy metadata rather than typed out, so
+a table added later is included by existing. The seeded ids are read from the
+migrations that wrote them, and the script **refuses to run** if they are not
+where it expects — as written, a drift there would delete the seed rather than
+keep it.
+
+## 3. What it does to `seq`, and why it does not restart it
+
+`global_seq` is **advanced, never rewound.** Restarting it at 1 is the obvious
+thing and it is wrong: a device pulls everything above the cursor it holds, so
+numbers below that cursor are numbers it will never ask for. Every row written
+after such a reset would be invisible to that device, permanently, with the sync
+indicator still reporting Synced.
+
+Instead the surviving seeded rows are re-stamped from the top of the sequence.
+That makes them *newer* than any cursor in the field, so a device that was not
+wiped pulls them and writes them over the copies it already has — same ids, so
+an upsert rather than a duplicate — and carries on. `updated_at` is deliberately
+left alone: it is what the per-field merge reads (SPEC 5.4), and the seeds are
+backdated on purpose so any renaming the farm has done still wins.
+
+## 4. Clear every device
+
+A wiped server and a full device is not a fresh start, and the reason is worth
+being precise about: **this reset is a hard delete, and a hard delete is
+invisible to sync.** Everything the app itself deletes is a soft delete that
+travels as a row (SPEC 4.8); rows removed underneath it do not travel at all. So
+a device that is not cleared keeps its entire copy of the farm, shows no sign
+that anything happened, and pushes back whatever was still in its outbox.
+
+Do every phone and tablet that has ever opened the app, and do them after the
+server, not before.
+
+**What has to go**, all of which a "site data" clear covers in one action: the
+IndexedDB database **`room-inventory`** (every record, the outbox, and the pull
+cursor), `localStorage` (`access_token`, `refresh_token`, `auth_state`) and the
+service worker's caches. On the Home Screen the app is called **Room
+Inventory**, shortened to **Rooms** under the icon.
+
+### iPhone / iPad — Safari
+
+Settings → Safari → Advanced → Website Data → find the app's domain → swipe left
+→ Delete. That is the one to prefer: **Clear History and Website Data** on the
+Safari settings screen works too, and takes every other site with it.
+
+### iPhone / iPad — installed from the Home Screen
+
+**Its storage is separate from Safari's**, so clearing Safari does not touch it,
+and this is the one people miss. Delete the app: press and hold the Home Screen
+icon → Remove App → Delete App. That deletes its data with it. Then add it
+again from Safari (Share → Add to Home Screen).
+
+If both exist — a Safari tab *and* a Home Screen app — clear both. They are two
+stores with two copies of the farm.
+
+### Android — Chrome
+
+Chrome → ⋮ → Settings → Site settings → All sites → find the app's domain →
+**Clear & reset**. Or, from the page itself: tap the padlock in the address bar
+→ Cookies and site data → Delete.
+
+### Android — installed from the Home Screen
+
+The installed app is a separate Android app with its own storage. Settings →
+Apps → **Room Inventory** → Storage & cache → **Clear storage** (not just Clear
+cache — that leaves the records). Uninstalling it does the same thing. Its data
+is not cleared by clearing Chrome's.
+
+On some Android builds it appears under Settings → Apps → See all apps, and the
+storage screen calls the button *Manage space*. If the app is not listed at all
+it was added as a plain shortcut rather than installed, in which case its data
+is Chrome's and the step above it is the one that clears it.
+
+### Then check it took
+
+Open the app. You should see the ten rooms, the eight treatment schedules and
+the two stores — freshly seeded locally — and nothing else: no animals, no
+sales, and the sync chip reporting no pending changes. Ten rooms rather than
+twenty is the signal that the seeded ids survived the server wipe.
 
 ---
 

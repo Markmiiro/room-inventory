@@ -248,6 +248,7 @@ backend/
   alembic/versions/      0001 schema, 0002 the ten rooms, 0003 purchases,
                          0004 health records, 0005 expenses and contacts,
                          … 0012 births and the offspring rename
+  scripts/reset_data.py  wipe the records, keep the seed, advance global_seq
   tests/                 conflict cases first
 
 frontend/src/
@@ -370,6 +371,46 @@ is worth recording because the fix does less than it first appears to:
   arrival. So birth records were the real fix for the missing ages, and they are
   now built (above); the add and edit forms also say plainly what a blank date
   of birth costs.
+
+### Starting the records again
+
+`backend/scripts/reset_data.py` wipes the recorded data and keeps the seed. With
+no flags it reports what it would delete, by table and count, and stops:
+
+```bash
+cd backend
+.venv/bin/python -m scripts.reset_data                    # report only
+.venv/bin/python -m scripts.reset_data --export-only      # take the export, delete nothing
+.venv/bin/python -m scripts.reset_data --confirm          # do it
+```
+
+Two things about it are load-bearing, and both fail silently if got wrong.
+
+**The seeded rows survive at their exact ids** — the ten rooms, the eight
+schedules, the two stores, the three produce types. Their ids are fixed in the
+migrations and in `db/seed.ts` so that a device seeding offline arrives at the
+same rows (SPEC 6.10); delete them and the next device to sync creates a second
+set. The script reads those ids from the migrations that wrote them rather than
+keeping a third copy, and refuses to run if they are not where it expects.
+
+**`global_seq` is advanced, never restarted.** A client pulls everything above
+the cursor it holds, so a sequence restarted at 1 hands out numbers that client
+has already passed — and every row written after the reset is invisible to it,
+for ever, with the indicator still reporting Synced. So the surviving seeded rows
+are re-stamped from the top of the sequence instead: a device that was not wiped
+sees them as new, re-pulls them onto the ids it already has, and converges.
+
+The table list comes from the SQLAlchemy metadata rather than being typed out, so
+a table added later is included by existing. `users` and `alembic_version` are
+never touched: a password is a credential rather than a record, and clearing the
+revision makes the next deploy re-run every migration.
+
+A `--confirm` run always writes a JSON export of everything first, to
+`backend/backups/`. **There is no import route yet** (SPEC 7 names one), so that
+file is for reading and re-entering; the device-side export below is the one
+that restores. `DEPLOY.md` has the full runbook, including how to clear an
+iPhone and an Android phone — and a home-screen-installed PWA, whose storage is
+separate from the browser's and is the copy people miss.
 
 ### Restoring a backup
 
