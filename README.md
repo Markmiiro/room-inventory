@@ -20,8 +20,9 @@ createdb room_inventory
 
 cp .env.example .env          # then fill it in:
 #   DATABASE_URL           postgresql+psycopg:///room_inventory
-#   JWT_SECRET             any long random string
-#   INITIAL_PASSWORD_HASH  generate it with the snippet below
+#   AUTH_ENABLED           false by default — see "No password by default" below
+#   JWT_SECRET             only needed with AUTH_ENABLED=true
+#   INITIAL_PASSWORD_HASH  only needed with AUTH_ENABLED=true
 .venv/bin/python -c "from app.auth import hash_password; print(hash_password('your-password'))"
 
 .venv/bin/alembic upgrade head        # also seeds the ten rooms
@@ -35,14 +36,55 @@ npm install
 npm run dev                            # http://localhost:5173, proxies /api to :8000
 ```
 
-Open the app, tap the sync chip in the top bar, and sign in with the password
-you hashed. Everything works before you sign in too — it just queues.
+Open the app. With the shipped default (`AUTH_ENABLED=false`) there is nothing
+to sign in to and sync starts working immediately. With `AUTH_ENABLED=true`, tap
+the sync chip in the top bar and sign in with the password you hashed —
+everything works before you sign in too, it just queues.
+
+## No password by default
+
+**`AUTH_ENABLED` defaults to false, and with it false anyone who finds the
+backend URL can read and write every record in this app.** Purchase prices, sale
+prices, customers, profit, every animal, every store. Not read-only: the sync
+endpoints accept pushes, so a stranger who has the URL can also change or delete
+what is there.
+
+There is no partial protection and no rate limit on that. The URL is the only
+secret, and a URL is not a secret: it travels in browser history, in server
+logs, in a screenshot of an address bar, in the frontend bundle that names it.
+Anyone who has ever had the link still has it after they stop being somebody
+the farm trusts.
+
+That is the trade this default makes, and it is stated here plainly because the
+alternative is finding it out from the consequences. It was chosen because the
+app is used by one household standing next to their animals, and a login screen
+between a person and the animal in front of them was costing more than it
+bought.
+
+**What stays on whatever the flag says** — with no token to check, these are
+what is left:
+
+- HTTPS only and HSTS, in production. A request that arrived over plain HTTP is
+  refused with code `https_required`.
+- `ALLOWED_ORIGINS` restricted to the frontend's origin. Startup still refuses
+  a production deployment where it is unset or points at localhost.
+- The rate limiter on `/auth/login`, five attempts per fifteen minutes per IP,
+  applied even while login is switched off.
+
+**Nothing was deleted to do this.** `app/auth.py`, the `users` table, the
+refresh tokens and the limiter are all still there, and there is no login page
+to have removed — signing in has always lived in the sync panel, beside the
+thing it affects. Turning it back on is `AUTH_ENABLED=true` plus
+`INITIAL_PASSWORD_HASH`, and a restart: no rebuild, no migration, no frontend
+deploy. The client learns which it is from `GET /config`, and any 401 makes the
+password box reappear on a device that was offline when the flag changed. See
+SPEC 21.
 
 ## Tests
 
 ```bash
-cd backend  && .venv/bin/python -m pytest      # 64 tests, needs a local PostgreSQL
-cd frontend && npm test                        # 134 tests
+cd backend  && .venv/bin/python -m pytest      # 136 tests, needs a local PostgreSQL
+cd frontend && npm test                        # 488 tests
 ```
 
 The suite shells out to `alembic`, so run it with the virtualenv on `PATH`
@@ -62,7 +104,8 @@ come back. It asserts they converge on identical state, that neither edit was
 lost, that both sales survived, that the count clamped at zero, and that the
 server recorded the oversell.
 
-It rebuilds its own database and starts its own backend every run. That is
+It rebuilds its own database and starts its own backend every run, with
+`AUTH_ENABLED=true` so that it exercises the authenticated path. That is
 necessary rather than tidy: SPEC 8 rate-limits login to five attempts per
 fifteen minutes and the limiter is in-process, so a second run against a warm
 server is locked out — and would otherwise "pass" by never syncing at all. The
@@ -176,10 +219,21 @@ is not copied into a build. Check any new screen there before calling it done:
 the bottom nav and any action bar are both `fixed bottom-0` and will stack if a
 screen shows them together.
 
-Screens that own the bottom of the display for one task — Move, and presumably
-Sell, Log death and Add or purchase — belong in `FOCUSED_ROUTES` in `App.tsx`.
-That hides the bottom nav, gives the screen's own action bar the space, and
-turns the top-left control into a cancel button.
+Screens that own the bottom of the display for one task — Move, Sell, Log death,
+Add or purchase and Log birth — belong in `FOCUSED_ROUTES` in `App.tsx`. That
+hides the bottom nav, gives the screen's own action bar the space, and turns the
+top-left control into a cancel button.
+
+**Look at the pixels, not only at the classes.** `btn-primary` once passed every
+automated check and rendered as unstyled text, because it is not a class this
+app defines — the three that exist are `btn-action`, `btn-secondary` and
+`btn-quiet`. A grep cannot tell you that. Screenshot the screen at 390px and
+read it.
+
+While checking Log birth this way, one thing showed up that no test would have:
+a disabled button looked exactly like an enabled one. Nothing had styled
+`:disabled`, because until then no button stayed disabled for longer than a save
+took. `styles/index.css` now dims all three, so no screen has to remember.
 
 ## Layout
 
@@ -192,7 +246,8 @@ backend/
     domain/merge.py      per-field last-write-wins
     domain/reconcile.py  the derived values above
   alembic/versions/      0001 schema, 0002 the ten rooms, 0003 purchases,
-                         0004 health records, 0005 expenses and contacts
+                         0004 health records, 0005 expenses and contacts,
+                         … 0012 births and the offspring rename
   tests/                 conflict cases first
 
 frontend/src/
@@ -201,6 +256,7 @@ frontend/src/
   db/seed.ts             the ten rooms, ids matched to the migration
   domain/rules.ts        occupancy, room type, current location — mirrors the server
   domain/alerts.ts       SPEC 4.6, as pure functions — four screens read them
+  domain/births.ts       SPEC 22 — who can be a dam, and the offspring total
   domain/calendar.ts     SPEC 4.7, the same events arranged by date
   domain/allocation.ts   SPEC 4.4 head-day expense shares — tests written first
   sync/engine.ts         outbox drain, backoff, pull cursor
@@ -251,17 +307,10 @@ noting the same animal keep both notes.
 
 ### Deliberately not built, and named so it stays visible
 
-SPEC 17 lists four gaps that are decisions rather than oversights. They are
-repeated here because a gap nobody can see is a gap nobody fixes, and the first
-of them is load-bearing for two features that *are* built.
+SPEC 17 listed four gaps that are decisions rather than oversights. The first
+has since been built (SPEC 22, and the section below); the rest are repeated
+here because a gap nobody can see is a gap nobody fixes.
 
-- **Birth records.** Offspring is a typed number. There is no birth event, no
-  link from offspring to mother, and an animal born on the farm has no arrival
-  date of its own. This is the main reason a date of birth goes missing, and a
-  record with no date of birth fires no treatment schedule (SPEC 13.4) and shows
-  no sale readiness (SPEC 15.3). The app says so rather than going quiet — a
-  chip on the record, a filter on the Animals list, and an alert under This
-  week — but saying so is not the same as fixing it.
 - **Customers and vets are not linked.** A sale stores the buyer as free text,
   so customer history does not work. SPEC 14 links vets to visits; sales still
   need the same treatment.
@@ -271,8 +320,39 @@ of them is load-bearing for two features that *are* built.
 - **Feed quantity.** Feed is tracked as cost, not as bags in and out. You know
   what you spent, not what you used.
 
-One more was found while building SPEC 13 and has since been **fixed**, but is
-worth recording because the fix does less than it first appears to:
+### Births, and what they do not fix
+
+**SPEC 22 is built.** An animal born on the farm now carries an exact date of
+birth, its mother and its father, and a loss at birth is a Death with cause
+`stillbirth` rather than nothing at all. `recordBirth` in `db/mutations.ts`
+writes the birth, a record per offspring, their placement in the dam's room and
+those stillbirths in one transaction — a tab closed halfway through must not
+leave a calf with no date of birth.
+
+Two decisions in there had plausible alternatives and are worth knowing:
+
+- **Every offspring born gets a record, losses included.** A stillbirth Death
+  has to hang off something, and the only other candidate was the dam — which
+  would have reduced *her* head count and, for a single animal, marked the
+  mother dead from her own calf's loss.
+- **The typed offspring figure was renamed, not reused.** It is
+  `offspring_baseline` now, meaning what happened before births were recorded,
+  and nothing in the app ever writes it. The screen shows the total as its two
+  parts — "5 — 2 typed in plus 3 from 2 recorded births" — because summing them
+  silently would make the typed half unfalsifiable. A field still called
+  `offspring_count` that no longer holds the offspring count is how a screen
+  ends up showing one number and labelling it the other.
+
+**It does not fix the existing herd.** An animal born from now on never enters
+the "no date of birth" alert, because the date is there from the moment its
+record is created. What the alert still covers is every record typed in without
+one — bought, given, or born here before this shipped — and nothing backfills
+those: a date of birth cannot be recovered from a record that never had one, and
+guessing it produces a wrong schedule, which SPEC 13.4 is explicit is worse than
+none.
+
+One more gap was found while building SPEC 13 and has since been **fixed**, but
+is worth recording because the fix does less than it first appears to:
 
 - **An animal's arrival date used to be discarded.** The Add or purchase form
   asked for one and the user typed it, but `createRecord` kept `arrival_date`
@@ -287,8 +367,9 @@ worth recording because the fix does less than it first appears to:
   is not an age. A two-year-old cow bought last week arrived last week and is
   not a week old, so `domain/age.ts` still counts an animal's age from its date
   of birth alone, exactly as SPEC 13.3 says. Only a group's age comes from its
-  arrival. So birth records remain the real fix for the missing ages, and the
-  add and edit forms now say plainly what a blank date of birth costs.
+  arrival. So birth records were the real fix for the missing ages, and they are
+  now built (above); the add and edit forms also say plainly what a blank date
+  of birth costs.
 
 ### Restoring a backup
 

@@ -43,6 +43,10 @@ app whose records go stale.
 separated: `UGX 1,250,000`. Short form `UGX 1.25M` only on summary cards, never on
 a form or a record detail. Store as integer shillings — never floats.
 
+**Auth is a flag.** `AUTH_ENABLED` defaults to false, so the shipped app has no
+password and the API is open to anyone who knows its URL. Section 21 is the
+decision and its cost; section 8 is what happens when it is turned on.
+
 **Time.** Store all timestamps as UTC ISO 8601. Display in East Africa Time
 (UTC+3). Dates without a time (move dates, sale dates) are plain `YYYY-MM-DD`
 with no timezone applied.
@@ -521,6 +525,11 @@ One user, but the API is on the public internet, so:
 - Rate limit `/auth/login` — 5 attempts per 15 minutes per IP.
 - Secrets from environment variables. Never committed.
 
+**Section 21 makes all of the above conditional on `AUTH_ENABLED`, which
+defaults to false.** Everything in this section is what happens when it is
+true; 21.2 says plainly what the default costs, and 21.3 lists the three things
+that stay on either way.
+
 ---
 
 ## 9. PWA
@@ -876,10 +885,12 @@ Never blocks or prompts a sale. It is information, not instruction.
 
 ## 17. Still not built, and named here so it stays visible
 
-- **Birth records.** Offspring is a typed number. There is no birth event, no
-  link from offspring to mother, and an animal born on the farm has no arrival
-  date of its own. This is the main reason a date of birth goes missing, which
-  is what breaks sections 13 and 15. Worth revisiting.
+- ~~**Birth records.**~~ **Built — see section 22.** It was the main reason a
+  date of birth went missing, which is what broke sections 13 and 15. An animal
+  born here now carries an exact date of birth, its mother and its father; a
+  loss at birth is a Death with cause `stillbirth` rather than nothing at all.
+  What remains unfixed is the herd that predates it: no date of birth can be
+  recovered for a record that never had one (22.7).
 - **Customers and vets are not linked.** A sale stores the buyer as free text,
   so customer history does not work. Section 14 links vets to visits; sales
   still need the same treatment.
@@ -1525,3 +1536,287 @@ so it is the case that matters most.
 Manage produce types explains all of this above the field. An unexplained
 optional number on a settings screen is one people either ignore or fill in
 wrongly, and both outcomes are worse than the field not being there.
+
+---
+
+## 21. Authentication as a config flag
+
+### 21.1 The decision
+
+`AUTH_ENABLED` is an environment variable on the backend, **default false**.
+
+- **False** — no password anywhere in the app, no token on the wire. The sync
+  engine talks to the API directly.
+- **True** — everything behaves exactly as section 8 describes. Same routes,
+  same Argon2id hash, same rotating refresh tokens, same 401s.
+
+The auth code, the `users` table, the refresh tokens and the login rate limiter
+all stay in place. **Nothing is deleted**, and that is the whole point of doing
+it this way: deleting them would make the decision irreversible and a rebuild
+would be the only way back. A flag is one variable in the host's dashboard and
+a restart.
+
+There was never a login *screen* to remove. Signing in has always lived in the
+sync panel behind the chip in the top bar, beside the thing it affects — so
+what this actually removes is the password box, and only while the server says
+it wants no password.
+
+### 21.2 What this costs, plainly
+
+**With `AUTH_ENABLED` false, anyone who finds the backend URL can read and
+write every record.** Purchase prices, sale prices, customers, profit, every
+animal and every store. Not read-only: the sync endpoints accept pushes, so a
+stranger can also change or delete what is there.
+
+There is no partial protection and no rate limit on that. The URL is the
+secret, and a URL is not a secret: it travels in browser history, in server
+logs, in a screenshot of the address bar, in whatever the frontend bundle is
+served with. Anyone who has ever had the link keeps it after they stop being
+somebody the farm trusts.
+
+This is written here rather than softened because the alternative is somebody
+discovering it later from the consequences.
+
+### 21.3 What stays on, whatever the flag says
+
+Three things are not conditional, and the reason is the same for all three:
+with no token to check, they are what is left.
+
+- **HTTPS only, HSTS on.** More necessary when auth is off, not less — there is
+  no token on the wire, so the transport is carrying the farm's whole record in
+  whatever the connection provides. In production a request that arrived over
+  plain HTTP is refused with code `https_required`, and every response carries
+  `Strict-Transport-Security`.
+- **`ALLOWED_ORIGINS` restricted to the frontend's origin.** Startup still
+  refuses a production deployment where it is unset or still points at
+  localhost.
+- **The rate limiter on the auth routes.** Five attempts per fifteen minutes
+  per IP, still applied to `/auth/login` while it is switched off. An
+  unauthenticated deployment is exactly the one whose login route should not be
+  free to probe.
+
+`JWT_SECRET` is the one startup check that becomes conditional. With auth off
+nothing is signed, and demanding a key to sign nothing would be a boot failure
+with no security behind it.
+
+### 21.4 How the client knows
+
+**`GET /config`** — unauthenticated, one boolean: `{"auth_enabled": false}`.
+
+It has to be unauthenticated, because its whole purpose is to say whether a
+token is required and a client that needed one to find out could never use the
+answer. It carries nothing about the farm.
+
+The client asks on every sync tick and caches the answer, which survives a
+restart. Three states, and the third is not a placeholder:
+
+| State | What the sync panel shows |
+|---|---|
+| `off` | No password box, and the sentence in 21.2 in words |
+| `required` | The password box, exactly as today |
+| `unknown` | The password box |
+
+`unknown` keeps the box because a device that has never reached the server
+cannot tell the two apart, and hiding the only way to sign in is the worse
+mistake — it cannot be recovered from the phone, whereas a password box on a
+server that wants none merely says so when it is used.
+
+**A 401 from any request sets the state to `required`**, whatever was cached.
+That is what makes the flag safe to turn back on: a device that was offline
+when it happened discovers it from the first refusal rather than from a support
+call.
+
+While the state is `off` the client sends no `Authorization` header at all,
+even if it is still holding a token from before. The server ignores a token in
+that state rather than refusing it, so a device that signed in last month keeps
+working.
+
+### 21.5 Turning it back on
+
+Set `AUTH_ENABLED=true` and `INITIAL_PASSWORD_HASH`, and restart. No rebuild,
+no migration, no frontend deploy. The first sync gets a 401, the sync panel
+grows its password box again, and local data is untouched throughout — SPEC 8's
+rule that an auth failure never wipes a device applies here too.
+
+---
+
+## 22. Birth records
+
+### 22.1 The problem
+
+SPEC 17 named this as the gap that makes two shipped features silently useless,
+and it was right: an animal born on this farm had no date of birth, because
+nothing recorded the day it was born. With no date of birth its treatment
+schedule does not fire (13.4) and its sale readiness does not compute (15.3).
+The app went quietest about the animals it should know most about.
+
+Offspring was a number typed by hand. There was no link from a calf to its
+mother, no record of how many were born against how many lived, and a loss at
+birth had nowhere to go at all — so it went nowhere.
+
+### 22.2 Birth (event entity)
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `dam_record_id` | string | yes | The mother. A female animal, or a group |
+| `sire_record_id` | string | no | A record on this farm |
+| `sire_name` | string | no | Free text, for an outside sire |
+| `date` | date | yes | Defaults to today. Never in the future |
+| `born_count` | integer | yes | 1 or more |
+| `surviving_count` | integer | yes | Never more than `born_count` |
+| `vet_id` | string | no | |
+| `notes` | text | no | |
+
+**An event**: append-only, never edited, corrected by adding (3.2). Two devices
+recording the same morning offline both keep their row, and a duplicate is
+visible as two births rather than resolved into one wrong one.
+
+Both sire fields may be null. Plenty of births have no recorded father, and
+inventing one is worse than a blank.
+
+**Record gains `dam_record_id`, `sire_record_id` and `birth_id`**, all optional
+and all set only on an offspring record created from a birth. They are null for
+everything bought, given, or already on the farm before this shipped — which is
+most of the herd and always will be.
+
+`dam_record_id` and `sire_record_id` are foreign keys; `birth_id` deliberately
+is not. The birth row is pushed one operation ahead of the offspring that point
+at it, and each operation in a batch lands in its own savepoint (5.2). A
+constraint there would turn a reordered or retried batch into a *rejected
+offspring record* — the animal lost to keep a link tidy, which is the wrong
+trade.
+
+### 22.3 What a birth does, in one transaction
+
+1. **Creates the offspring.** One or two get individual animal records with
+   `date_of_birth` set to the birth date, `source = born_here`, species and
+   breed inherited from the dam, and sex asked per offspring. More than two are
+   recorded as one group instead. The tags are suggested by the same
+   sequential-tag helper a group split uses (4.3).
+2. **Places them in the dam's current room**, as an initial move with no origin
+   (3.5). A dam who is in no room gives her offspring no move rather than an
+   invented one.
+3. **Where `born_count` exceeds `surviving_count`, writes a Death for the
+   difference with cause `stillbirth`.** Losses at birth do not vanish.
+
+All of it or none of it. A tab closed halfway through must not leave a calf
+with no date of birth, or a loss with nothing recording it — the two silent
+failures this section exists to end.
+
+**Every offspring born gets a record, survivors and losses alike.** The
+stillbirth Death has to hang off something, and the only other candidate was
+the dam — which would have reduced *her* head count and, for a single animal,
+marked the mother dead from her own calf's loss. A record for an animal that
+did not live reads strangely for a moment and is the honest shape: it holds one
+date, one cause, and it keeps the farm's mortality figures complete.
+
+For a group, the record is created holding `born_count` and the stillbirths
+take the difference back out, so its head count **derives** to the surviving
+figure rather than being typed (3.4). Nothing anywhere types the surviving
+count into a head count column.
+
+### 22.4 Offspring count — one source of truth
+
+The typed `offspring_count` is renamed **`offspring_baseline`**, with
+`offspring_updated_at` becoming `offspring_baseline_updated_at`. The values
+carry across untouched.
+
+It now means: *what happened before births were recorded in the app*, typed by
+somebody who was there. **Nothing in the app ever writes it.** A birth adds a
+Birth row and leaves the typed figure exactly as typed.
+
+The total is displayed as its two parts, never as one number:
+
+> Offspring · 5 — 2 typed in (updated 12 Aug 2026) plus 3 from 2 recorded births
+
+Summing them silently would make the typed half unfalsifiable: nobody could
+tell which part of a wrong number was wrong. The baseline keeps the
+last-updated date it always carried, for the same reason it always had one.
+
+The renaming is not cosmetic. A field still called `offspring_count` that no
+longer holds the offspring count is exactly how a screen ends up showing one of
+the two numbers and labelling it the other.
+
+**Surviving offspring are what the birth half counts.** A stillbirth is already
+in the mortality figures, on its own record and under its own cause; counting
+it here as well would have one loss adding to two different totals.
+
+### 22.5 Screens
+
+**Log birth** — a fifteenth screen, reached from Record detail on any female
+animal or group, and from the Calendar with the selected day carried through. It
+is not a destination on the bottom bar; five is still the number (11), with
+Stores the sixth (20.15).
+
+It has to be quick, because it is used standing next to an animal that has just
+given birth: the dam, the date, how many born, how many survived, then the
+offspring. Everything else defaults to something right most of the time — today,
+the dam's species and breed, her room — and the surviving count follows the born
+count while they agree, so the ordinary case needs one number rather than two.
+
+**Record detail on a dam** lists her offspring, each tappable, sold and dead
+ones included: they are still hers, and leaving them out would disagree with
+the total shown above them.
+
+**Record detail on an offspring** shows its dam and sire, tappable, with the
+birth's date and how many it was one of. An outside sire is shown as the name
+recorded, with nothing to open.
+
+**Calendar** shows births on their date, never as scheduled — a birth is a thing
+that happened, and the app has no notion of a due date for one. Tapping it opens
+the dam, which is where the offspring are listed.
+
+### 22.6 Rules
+
+- **Only offered on female animals.** A male is not offered it: he did not give
+  birth, and the useful thing to do with a sire is name him on the birth. An
+  animal whose sex has not been recorded is not offered it either — nothing is
+  assumed from an empty field.
+- **A group can be the dam** — a hatch — creating a group of offspring. A group
+  has no sex because a group is not one animal, and refusing groups to keep the
+  rule tidy would mean the hatch could not be recorded at all.
+- **A birth cannot precede the dam's own date of birth** (or her arrival date,
+  for a group), and cannot be in the future. Both are errors rather than
+  warnings: an animal born before its mother is not a judgement call.
+- **A dam with no date of birth of her own accepts any past date.** The unknown
+  case stays unknown rather than being guessed at, exactly as 13.4 requires
+  everywhere else.
+- **A dam that is sold or dead can still have a backdated birth logged**, with a
+  warning naming the date she left if the birth is after it. A warning and not a
+  block: the birth really happened, and refusing it would lose it. Refusing
+  would also push somebody into typing a different date to get past the form,
+  which is a worse record than a true one with a warning on it.
+- **`surviving_count` may be zero.** A birth where nothing lived is a real event
+  with real losses to record.
+- **Birth is an event**: append-only, never edited. Correct by adding.
+
+### 22.7 What this fixes, and what it does not
+
+Every animal born here from now on has an exact date of birth, so its treatment
+schedule fires and its sale readiness computes. Such an animal never enters the
+"no date of birth" alert at all — not because the alert was weakened, but
+because the date is there from the moment the record is created.
+
+**What the alert still covers is every record somebody typed in without a
+date** — bought, given, or born here before this shipped. That is the whole
+existing herd, and nothing here backfills it: a date of birth cannot be
+recovered from a record that never had one, and guessing it would produce a
+wrong schedule, which 13.4 is explicit is worse than none. The alert stays, and
+on a farm with no history entered it will keep naming the same records until
+somebody fills them in.
+
+### 22.8 Sync
+
+`Birth` is an event and follows 5.4's event rules: union by id, never a
+conflict. The offspring records, their moves and the stillbirth Deaths are
+ordinary records, moves and deaths and need no special handling.
+
+The renamed column is the one migration hazard. A device that was offline when
+the rename shipped is still holding outbox entries spelled `offspring_count`,
+and unknown fields are ignored rather than rejected — which here would silently
+drop a number somebody typed. The server accepts the old spellings and maps
+them, once, on the way in.
+
+Births are included in the device export, and `schema_version` is bumped
+alongside it: a birth is the only record of where an animal born here came from,
+so a restore without them leaves offspring with a date of birth and no mother.

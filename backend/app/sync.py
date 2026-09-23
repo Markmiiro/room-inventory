@@ -26,6 +26,7 @@ from app.config import get_settings
 from app.domain.merge import Stamp, merge_fields
 from app.domain.reconcile import reconcile_records
 from app.models import (
+    Birth,
     Customer,
     Death,
     Expense,
@@ -65,6 +66,8 @@ ENTITY_MODELS: dict[str, type] = {
     "treatment_schedule": TreatmentSchedule,
     "vet_visit": VetVisit,
     "visit_note": VisitNote,
+    # SPEC 22 — an event, like a move or a death.
+    "birth": Birth,
     # SPEC 20.13 — stores and produce types are state entities; intakes,
     # outtakes and counts are events, append-only.
     "store": Store,
@@ -81,8 +84,10 @@ WRITABLE: dict[str, set[str]] = {
     "room": {"code", "name", "capacity", "is_isolation", "notes", "deleted_at"},
     "record": {
         "kind", "species", "tag", "breed", "sex", "date_of_birth", "arrival_date",
-        "initial_head_count", "offspring_count", "offspring_updated_at", "source",
-        "status", "parent_record_id", "notes", "deleted_at",
+        "initial_head_count", "offspring_baseline", "offspring_baseline_updated_at",
+        "source", "status", "parent_record_id", "notes", "deleted_at",
+        # SPEC 22 — set once, on an offspring record created from a birth.
+        "dam_record_id", "sire_record_id", "birth_id",
     },
     "move": {
         "record_id", "from_room_id", "to_room_id", "date", "count", "reason", "note",
@@ -107,6 +112,10 @@ WRITABLE: dict[str, set[str]] = {
         "date", "vet_id", "status", "call_out_fee", "reason", "notes", "deleted_at",
     },
     "visit_note": {"visit_id", "record_id", "note"},
+    "birth": {
+        "dam_record_id", "sire_record_id", "sire_name", "date", "born_count",
+        "surviving_count", "vet_id", "notes",
+    },
     "store": {"code", "name", "capacity_sacks", "notes", "deleted_at"},
     "produce_type": {"name", "is_active", "typical_sack_kg", "notes", "deleted_at"},
     "stock_intake": {
@@ -123,8 +132,36 @@ WRITABLE: dict[str, set[str]] = {
     },
 }
 
-DATE_FIELDS = {"date", "date_of_birth", "arrival_date", "offspring_updated_at", "next_due"}
+DATE_FIELDS = {
+    "date", "date_of_birth", "arrival_date", "offspring_baseline_updated_at", "next_due",
+}
 DATETIME_FIELDS = {"deleted_at"}
+
+# SPEC 22 — what a field used to be called.
+#
+# `offspring_count` was renamed to `offspring_baseline`, and a device that was
+# offline when the rename shipped is still holding outbox entries that use the
+# old name. Unknown keys are ignored rather than rejected (see WRITABLE), which
+# is the right behaviour in general and would here mean silently dropping a
+# number somebody typed. So the old spelling is accepted and mapped, once, on
+# the way in.
+LEGACY_FIELDS = {
+    "offspring_count": "offspring_baseline",
+    "offspring_updated_at": "offspring_baseline_updated_at",
+}
+
+
+def _rename_legacy(data: dict[str, Any]) -> dict[str, Any]:
+    """Map retired field names onto their current ones, without overwriting a
+    value the client also sent under the new name."""
+    if not any(old in data for old in LEGACY_FIELDS):
+        return data
+    out = dict(data)
+    for old, new in LEGACY_FIELDS.items():
+        if old in out:
+            value = out.pop(old)
+            out.setdefault(new, value)
+    return out
 
 
 def now() -> datetime:
@@ -238,7 +275,11 @@ def _apply_event(
         _touch_event(existing_record_id=getattr(existing, "record_id", None), touched=touched)
         return OperationResult(id=op.id, entity=op.entity, status="duplicate")
 
-    fields = {k: _coerce(k, v) for k, v in op.data.items() if k in WRITABLE[op.entity]}
+    fields = {
+        k: _coerce(k, v)
+        for k, v in _rename_legacy(op.data).items()
+        if k in WRITABLE[op.entity]
+    }
 
     missing = _missing_required(op.entity, fields)
     if missing:
@@ -282,6 +323,10 @@ def _missing_required(entity: str, fields: dict[str, Any]) -> list[str]:
         "purchase": ["record_id", "date", "price", "count"],
         "health_record": ["record_id", "type", "date"],
         "visit_note": ["visit_id", "record_id", "note"],
+        # SPEC 22. A birth with no dam is not a birth, and the two counts are
+        # what the whole event is for — a row missing either would leave the
+        # offspring it created unexplained.
+        "birth": ["dam_record_id", "date", "born_count", "surviving_count"],
         "expense": ["amount", "category_id", "date", "applies_to"],
         # SPEC 20.8 — `kg` is required on every stock event and `sacks` never
         # is. Weight is what gets sold and what carries value; sacks are a
@@ -301,7 +346,9 @@ def _apply_state(
 ) -> OperationResult:
     model = ENTITY_MODELS[op.entity]
     writable = WRITABLE[op.entity]
-    incoming = {k: _coerce(k, v) for k, v in op.data.items() if k in writable}
+    incoming = {
+        k: _coerce(k, v) for k, v in _rename_legacy(op.data).items() if k in writable
+    }
 
     row_stamp = clamp_clock_skew(op.updated_at, server_time, f"{op.entity}:{op.id}")
     stamps: dict[str, Stamp] = {}

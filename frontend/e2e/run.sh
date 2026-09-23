@@ -35,6 +35,10 @@ from app.auth import hash_password
 password, out = sys.argv[1], sys.argv[2]
 pathlib.Path(out).write_text(
     "DATABASE_URL='postgresql+psycopg:///room_inventory_e2e'\n"
+    # SPEC 21 — the flag is false by default, and this test is about the
+    # authenticated path: both devices sign in, so it asks for that path
+    # explicitly rather than silently exercising the open one.
+    "AUTH_ENABLED='true'\n"
     "JWT_SECRET='e2e-only-secret-not-used-anywhere-else'\n"
     "ALLOWED_ORIGINS='http://localhost:5173'\n"
     f"INITIAL_PASSWORD_HASH='{hash_password(password)}'\n"

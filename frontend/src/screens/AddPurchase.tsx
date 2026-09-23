@@ -123,7 +123,7 @@ export function AddPurchaseScreen() {
       // figure that carries its own "last updated" stamp (SPEC 3.4), so it is
       // written as an edit rather than smuggled into creation.
       if (offspringCount !== null) {
-        await updateRecord(record.id, { offspring_count: offspringCount });
+        await updateRecord(record.id, { offspring_baseline: offspringCount });
       }
 
       navigate(`/records/${record.id}`, { replace: true });

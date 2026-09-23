@@ -1,6 +1,7 @@
 import { byCode, byName, type StockInput } from "../domain/stores";
 import { db } from "./schema";
 import type {
+  Birth,
   Death,
   Expense,
   ExpenseCategory,
@@ -259,4 +260,40 @@ export async function allStockEvents(): Promise<StockInput> {
     allStockCounts(),
   ]);
   return { intakes, outtakes, counts };
+}
+
+
+/* ── SPEC 22 — births ────────────────────────────────────────────────────── */
+
+/** Every birth, for the Calendar and for the offspring totals. */
+export async function allBirths(): Promise<Birth[]> {
+  const births = await db.births.toArray();
+  return births.filter((b) => !b.deleted_at);
+}
+
+/** One dam's births, newest first. Indexed rather than scanned: SPEC 6.13
+ *  assumes thousands of rows, and a dam's own screen must not read them all. */
+export async function birthsForDam(damId: string): Promise<Birth[]> {
+  const births = await db.births.where("dam_record_id").equals(damId).toArray();
+  return births
+    .filter((b) => !b.deleted_at)
+    .sort((a, b) => (a.date === b.date ? b.created_at.localeCompare(a.created_at) : b.date.localeCompare(a.date)));
+}
+
+/**
+ * The records born of this dam — her offspring, tappable from her own screen
+ * (SPEC 22).
+ *
+ * Sold and dead offspring are included. A dam's offspring are a fact about her
+ * regardless of what became of them, and leaving out the ones that died would
+ * quietly disagree with the total shown beside the figure.
+ */
+export async function offspringOf(damId: string): Promise<Record_[]> {
+  const records = await db.records.where("dam_record_id").equals(damId).toArray();
+  return records
+    .filter((r) => !r.deleted_at)
+    .sort((a, b) =>
+      (b.date_of_birth ?? b.arrival_date ?? "").localeCompare(a.date_of_birth ?? a.arrival_date ?? "") ||
+      a.tag.localeCompare(b.tag),
+    );
 }

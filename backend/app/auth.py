@@ -151,3 +151,50 @@ def require_auth(
 
 def constant_time_equals(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)
+
+
+def auth_is_enabled() -> bool:
+    """SPEC 21 — whether the API requires a token. Read per request, not cached
+    at import, so flipping the variable and restarting is the whole change."""
+    return get_settings().auth_enabled
+
+
+def require_auth_if_enabled(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> str | None:
+    """The dependency the sync routes use.
+
+    With ``AUTH_ENABLED`` false this waves everything through and the sync
+    engine talks to the API with no token at all. With it true the behaviour is
+    exactly ``require_auth`` — same checks, same problem codes, same 401 — so
+    turning the flag back on restores the shipped behaviour without touching
+    any route.
+
+    Nothing about the *rest* of SPEC 8 is conditional: HTTPS and HSTS, the CORS
+    origin restriction and the login rate limiter all apply either way. See
+    ``guard_auth_route``.
+    """
+    if not auth_is_enabled():
+        return None
+    return require_auth(credentials)
+
+
+def guard_auth_route() -> None:
+    """Refuse an auth route while authentication is switched off.
+
+    The routes stay mounted rather than being deleted, because deleting them is
+    what would make SPEC 21 a one-way door. They answer with a named code so a
+    client — or somebody reading a log at three in the morning — is told the
+    server is not asking for a password, rather than left to infer it from a
+    401 that never comes.
+    """
+    if auth_is_enabled():
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "auth_disabled",
+            "title": "Authentication is switched off on this server",
+            "detail": "AUTH_ENABLED is false, so there is no password to sign in with.",
+        },
+    )

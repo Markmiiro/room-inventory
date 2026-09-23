@@ -61,6 +61,24 @@
            md:min-h-touch-desktop;
   }
 
+  /**
+   * A disabled button has to look disabled.
+   *
+   * Nothing in the app styled this, because until SPEC 22 no button stayed
+   * disabled for longer than a save took: `disabled={saving}` flickers and is
+   * gone. Log birth can hold its action bar disabled for as long as a date is
+   * wrong, and a full-strength yellow button that does nothing when tapped is
+   * worse than no button — the person taps it twice and then looks for what
+   * else is broken.
+   *
+   * One rule for all three, so no screen has to remember.
+   */
+  .btn-action:disabled,
+  .btn-secondary:disabled,
+  .btn-quiet:disabled {
+    @apply opacity-50 shadow-none cursor-not-allowed;
+  }
+
   .chip {
     @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1
            font-mono text-data-label uppercase;

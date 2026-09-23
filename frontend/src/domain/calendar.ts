@@ -1,4 +1,5 @@
 import type {
+  Birth,
   Death,
   HealthRecord,
   Move,
@@ -26,7 +27,15 @@ import { scheduleDueItems } from "./schedules";
  * has not.
  */
 
-export type CalendarKind = "treatment" | "purchase" | "sale" | "move" | "death" | "visit";
+export type CalendarKind =
+  | "treatment"
+  | "purchase"
+  | "sale"
+  | "move"
+  | "death"
+  | "visit"
+  // SPEC 22 — births show on their date.
+  | "birth";
 
 export interface CalendarEvent {
   id: string;
@@ -49,6 +58,7 @@ export const KIND_LABEL: Record<CalendarKind, string> = {
   move: "Moves",
   death: "Deaths",
   visit: "Vet visits",
+  birth: "Births",
 };
 
 export interface CalendarInputs {
@@ -62,6 +72,9 @@ export interface CalendarInputs {
   /** SPEC 16 — the calendar gains scheduled treatments. Defaulted so existing
    *  callers keep working unchanged. */
   schedules?: TreatmentSchedule[];
+  /** SPEC 22 — births, on the day they happened. Defaulted so existing callers
+   *  keep working unchanged. */
+  births?: Birth[];
   /** SPEC 16 — the calendar gains planned vet visits. */
   visits?: VetVisit[];
   vets?: Vet[];
@@ -202,6 +215,32 @@ export function calendarEvents(inputs: CalendarInputs): CalendarEvent[] {
       title: visit.status === "planned" ? `${who} visit planned` : `${who} visit`,
       detail: visit.reason ?? (visit.status === "planned" ? "Planned" : "Completed"),
       scheduled: visit.status === "planned",
+    });
+  }
+
+  /**
+   * SPEC 22 — a birth, on its date.
+   *
+   * Never scheduled: a birth is a thing that happened, and the app has no
+   * notion of a due date for one. It carries the dam's `recordId` so tapping it
+   * opens her, which is where her offspring are listed — the offspring
+   * themselves each have their own records and their own placement moves, which
+   * are already on this calendar as arrivals.
+   */
+  for (const birth of inputs.births ?? []) {
+    if (birth.deleted_at) continue;
+    const lost = birth.born_count - birth.surviving_count;
+    events.push({
+      id: `birth:${birth.id}`,
+      kind: "birth",
+      date: birth.date,
+      title: `${name(birth.dam_record_id)} gave birth`,
+      detail:
+        lost > 0
+          ? `${birth.surviving_count} of ${birth.born_count} survived`
+          : `${birth.born_count} born`,
+      recordId: birth.dam_record_id,
+      scheduled: false,
     });
   }
 

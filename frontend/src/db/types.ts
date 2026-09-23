@@ -67,14 +67,69 @@ export interface Record_ extends SyncFields {
   initial_head_count: number;
   /** Derived from events; the server recomputes it and may correct this. */
   head_count: number;
-  offspring_count: number | null;
-  offspring_updated_at: string | null;
+  /**
+   * SPEC 22 — the hand-typed figure, renamed.
+   *
+   * It used to be `offspring_baseline`, and it was the only answer the app had.
+   * Now that births are recorded it is the **baseline**: what happened before
+   * there were birth records, typed by somebody who was there. The total a
+   * screen shows is this plus the births counted (`offspringTotal` in
+   * `domain/births.ts`), and nothing in the app ever writes this value except
+   * the person typing it.
+   *
+   * The rename is the point. A field called `offspring_baseline` that no longer
+   * holds the offspring count is how a screen ends up displaying one of the two
+   * numbers and labelling it the other.
+   */
+  offspring_baseline: number | null;
+  offspring_baseline_updated_at: string | null;
   source: Source;
   status: RecordStatus;
   parent_record_id: string | null;
   notes: string | null;
   /** Cache of the latest move's destination. Recomputed, never authoritative. */
   current_room_id: string | null;
+  /** SPEC 22 — the mother, when this record was created from a birth. */
+  dam_record_id: string | null;
+  /** SPEC 22 — the father, when he is a record on this farm. An outside sire
+   *  is named on the Birth as free text and has nothing here. */
+  sire_record_id: string | null;
+  /** SPEC 22 — the birth event this record came out of. */
+  birth_id: string | null;
+}
+
+/**
+ * SPEC 22 — a birth on this farm.
+ *
+ * The gap it closes is a silent one: an animal born here had no date of birth,
+ * so its treatment schedule never fired and its sale readiness never computed
+ * (SPEC 13.4, 15.3). The app was quietest about the animals it knew most about.
+ *
+ * An **event**, append-only like a move or a death. A birth happened on a day;
+ * a mistake is corrected by adding, never by editing. That is also what makes
+ * two devices recording the same morning safe — the merge is the union, and a
+ * duplicate shows up as two births rather than being resolved into one wrong
+ * one.
+ *
+ * What it does when it is written is in `recordBirth` (`db/mutations.ts`): the
+ * offspring records, their placement in the dam's room, and a Death for any
+ * that did not survive, all in one transaction.
+ */
+export interface Birth extends SyncFields {
+  dam_record_id: string;
+  /** A record on this farm. */
+  sire_record_id: string | null;
+  /** Free text, for somebody else's animal. Both may be null: plenty of births
+   *  have no recorded father, and inventing one is worse than a blank. */
+  sire_name: string | null;
+  date: string;
+  born_count: number;
+  /** Never more than `born_count`. The difference becomes a Death with cause
+   *  `stillbirth`, written in the same transaction, so a loss at birth is in
+   *  the mortality figures rather than nowhere. */
+  surviving_count: number;
+  vet_id: string | null;
+  notes: string | null;
 }
 
 export interface Move extends SyncFields {
@@ -419,6 +474,7 @@ export type EntityName =
   | "treatment_schedule"
   | "vet_visit"
   | "visit_note"
+  | "birth"
   | "store"
   | "produce_type"
   | "stock_intake"

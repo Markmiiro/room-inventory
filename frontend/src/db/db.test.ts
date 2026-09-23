@@ -244,13 +244,13 @@ describe("editing a record", () => {
       sex: "female",
       source: "bought",
     });
-    expect(record.offspring_updated_at).toBeNull();
+    expect(record.offspring_baseline_updated_at).toBeNull();
 
-    await updateRecord(record.id, { offspring_count: 2 });
+    await updateRecord(record.id, { offspring_baseline: 2 });
 
     const updated = await db.records.get(record.id);
-    expect(updated!.offspring_count).toBe(2);
-    expect(updated!.offspring_updated_at).toBe(todayInEAT());
+    expect(updated!.offspring_baseline).toBe(2);
+    expect(updated!.offspring_baseline_updated_at).toBe(todayInEAT());
   });
 
   it("leaves the stamp alone when the figure did not change", async () => {
@@ -263,13 +263,13 @@ describe("editing a record", () => {
       sex: "female",
       source: "bought",
     });
-    await updateRecord(record.id, { offspring_count: 2 });
-    await db.records.update(record.id, { offspring_updated_at: "2026-01-05" });
+    await updateRecord(record.id, { offspring_baseline: 2 });
+    await db.records.update(record.id, { offspring_baseline_updated_at: "2026-01-05" });
 
-    await updateRecord(record.id, { offspring_count: 2, breed: "Friesian" });
+    await updateRecord(record.id, { offspring_baseline: 2, breed: "Friesian" });
 
     const updated = await db.records.get(record.id);
-    expect(updated!.offspring_updated_at).toBe("2026-01-05");
+    expect(updated!.offspring_baseline_updated_at).toBe("2026-01-05");
     expect(updated!.breed).toBe("Friesian");
   });
 

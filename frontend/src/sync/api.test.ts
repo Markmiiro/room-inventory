@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, NOT_JSON, login, pullChanges, pushOperations } from "./api";
+import {
+  ApiError,
+  NOT_JSON,
+  getAuthState,
+  login,
+  pullChanges,
+  pushOperations,
+  refreshAuthState,
+  setTokens,
+} from "./api";
 
 /**
  * The wrong-server case.
@@ -148,5 +157,75 @@ describe("what still works", () => {
     const error = (await pullChanges(0).catch((e: ApiError) => e)) as ApiError;
     expect(error.status).toBe(0);
     expect(error.code).toBe("offline");
+  });
+});
+
+
+/**
+ * SPEC 21 — how the client learns whether this server wants a password.
+ *
+ * The rule that matters most is the last one: a 401 promotes the state to
+ * `required` whatever was cached, because that is what makes the flag safe to
+ * turn back on. A device that was offline when it happened has to find out from
+ * the first refusal rather than from a support call.
+ */
+describe("the auth state", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setTokens(null, null);
+  });
+
+  it("reads `off` from the server's one boolean", async () => {
+    fetchMock.mockResolvedValue(reply(JSON.stringify({ auth_enabled: false })));
+
+    expect(await refreshAuthState()).toBe("off");
+    expect(getAuthState()).toBe("off");
+  });
+
+  it("reads `required` the same way", async () => {
+    fetchMock.mockResolvedValue(reply(JSON.stringify({ auth_enabled: true })));
+
+    expect(await refreshAuthState()).toBe("required");
+  });
+
+  it("keeps the cached answer when the server cannot be reached", async () => {
+    fetchMock.mockResolvedValue(reply(JSON.stringify({ auth_enabled: false })));
+    await refreshAuthState();
+
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    // An old answer beats a guess: guessing wrong either hides the only way to
+    // sign in or demands a password that does not exist.
+    expect(await refreshAuthState()).toBe("off");
+  });
+
+  it("sends no token while the server says it wants none", async () => {
+    fetchMock.mockResolvedValue(reply(JSON.stringify({ auth_enabled: false })));
+    await refreshAuthState();
+    setTokens("stale-token-from-before-the-flag-changed", "stale-refresh");
+
+    fetchMock.mockResolvedValue(
+      reply(JSON.stringify({ changes: [], cursor: 0, has_more: false, server_time: "" })),
+    );
+    await pullChanges(0);
+
+    const headers = new Headers(fetchMock.mock.calls.at(-1)![1].headers);
+    expect(headers.get("Authorization")).toBeNull();
+  });
+
+  it("promotes itself to `required` on a 401, whatever was cached", async () => {
+    fetchMock.mockResolvedValue(reply(JSON.stringify({ auth_enabled: false })));
+    await refreshAuthState();
+    expect(getAuthState()).toBe("off");
+
+    fetchMock.mockResolvedValue(
+      reply(JSON.stringify({ code: "not_authenticated", title: "Authentication required" }), {
+        status: 401,
+        type: "application/problem+json",
+      }),
+    );
+    await pullChanges(0).catch(() => undefined);
+
+    // The flag was turned back on while this device was away.
+    expect(getAuthState()).toBe("required");
   });
 });

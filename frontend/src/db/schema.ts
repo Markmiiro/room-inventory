@@ -9,6 +9,7 @@ import {
 } from "./backfill";
 
 import type {
+  Birth,
   Customer,
   Death,
   Expense,
@@ -55,6 +56,8 @@ export class RoomInventoryDB extends Dexie {
   treatmentSchedules!: Table<TreatmentSchedule, string>;
   vetVisits!: Table<VetVisit, string>;
   visitNotes!: Table<VisitNote, string>;
+  // SPEC 22 — births. An event table, like moves and deaths.
+  births!: Table<Birth, string>;
   // SPEC 20 — the produce inventory. A separate set of tables on purpose: a
   // Store is not a Room, and sacks in a Room would corrupt occupancy, room type
   // and every alert that reads them (SPEC 20.2).
@@ -297,6 +300,50 @@ export class RoomInventoryDB extends Dexie {
       stockIntakes: "id, [store_id+produce_type_id], store_id, produce_type_id, date",
       stockOuttakes: "id, [store_id+produce_type_id], store_id, produce_type_id, date, reason",
       stockCounts: "id, [store_id+produce_type_id], store_id, produce_type_id, date",
+    });
+
+    /**
+     * SPEC 22 — births, and the offspring figure renamed.
+     *
+     * `births` is indexed by the dam, because that is the one query every
+     * screen runs: a dam's own detail lists her offspring, and the total shown
+     * beside her offspring baseline counts her births. `date` is indexed for
+     * the Calendar, which reads across every birth rather than one dam's.
+     *
+     * `records` gains `dam_record_id` as an index for the reverse lookup —
+     * every record born of this dam — and restates its existing index list,
+     * because Dexie replaces a table's schema rather than merging into it.
+     * `birth_id` and `sire_record_id` are looked up from a record rather than
+     * scanned for, so neither needs one.
+     *
+     * The upgrade renames two fields on every existing record. Nothing is
+     * queued for the server: the column rename in migration 0012 carries the
+     * same values across on that side, so both ends arrive at the same number
+     * without talking. An outbox entry queued before this shipped still uses
+     * the old names, and `app.sync.LEGACY_FIELDS` maps them.
+     */
+    this.version(12).stores({
+      births: "id, dam_record_id, date",
+      records:
+        "id, status, species, tag, current_room_id, parent_record_id, dam_record_id, [status+current_room_id]",
+    }).upgrade(async (tx) => {
+      const records = await tx.table("records").toArray();
+      for (const record of records) {
+        const legacy = record as Record<string, unknown>;
+        await tx.table("records").put({
+          ...record,
+          offspring_baseline: legacy.offspring_baseline ?? legacy.offspring_count ?? null,
+          offspring_baseline_updated_at:
+            legacy.offspring_baseline_updated_at ?? legacy.offspring_updated_at ?? null,
+          offspring_count: undefined,
+          offspring_updated_at: undefined,
+          // Null for everything that predates births being recorded, which is
+          // every animal already on the farm and always will be.
+          dam_record_id: legacy.dam_record_id ?? null,
+          sire_record_id: legacy.sire_record_id ?? null,
+          birth_id: legacy.birth_id ?? null,
+        });
+      }
     });
   }
 }

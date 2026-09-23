@@ -7,14 +7,17 @@ import { updateRecord, type RecordEdit } from "../db/mutations";
 import {
   activeRecords,
   allSchedules,
+  birthsForDam,
   childRecords,
   healthForRecord,
   liveRooms,
   movesForRecord,
+  offspringOf,
   visitNotesForRecord,
 } from "../db/queries";
 import { db } from "../db/schema";
 import type {
+  Birth,
   HealthRecord,
   Move,
   MoveReason,
@@ -27,6 +30,7 @@ import type {
   VisitNote,
 } from "../db/types";
 import { AGE_UNKNOWN_CHIP, AGE_UNKNOWN_DETAIL, isAgeUnknown } from "../domain/age";
+import { canBeDam, describeOffspringParts, offspringTotal } from "../domain/births";
 import { formatDate, formatUGX, headUnit, plural } from "../domain/format";
 import { typeLabel, withdrawalEnd } from "../domain/alerts";
 import { scheduleDueItems, type DueItem } from "../domain/schedules";
@@ -94,6 +98,24 @@ export function RecordDetailScreen() {
   const parent = useLiveQuery(
     () => (record?.parent_record_id ? db.records.get(record.parent_record_id) : undefined),
     [record?.parent_record_id],
+    undefined,
+  );
+  // SPEC 22 — her births, her offspring, and her own parents.
+  const births = useLiveQuery(() => birthsForDam(recordId), [recordId], [] as Birth[]);
+  const offspring = useLiveQuery(() => offspringOf(recordId), [recordId], [] as Record_[]);
+  const dam = useLiveQuery(
+    () => (record?.dam_record_id ? db.records.get(record.dam_record_id) : undefined),
+    [record?.dam_record_id],
+    undefined,
+  );
+  const sire = useLiveQuery(
+    () => (record?.sire_record_id ? db.records.get(record.sire_record_id) : undefined),
+    [record?.sire_record_id],
+    undefined,
+  );
+  const birth = useLiveQuery(
+    () => (record?.birth_id ? db.births.get(record.birth_id) : undefined),
+    [record?.birth_id],
     undefined,
   );
 
@@ -182,6 +204,15 @@ export function RecordDetailScreen() {
                 Log death
               </Link>
             </div>
+            {/* SPEC 22 — offered on female animals and on groups, which is
+                where a hatch is recorded. A male is not offered it: he did not
+                give birth, and the useful thing to do with a sire is name him
+                on the birth itself. */}
+            {canBeDam(record) && (
+              <Link to={`/birth?record=${record.id}`} className="btn-secondary w-full mt-3">
+                Log birth
+              </Link>
+            )}
           </>
         )}
       </section>
@@ -209,26 +240,7 @@ export function RecordDetailScreen() {
           </>
         )}
         <Fact label="Source" value={SOURCE_LABEL[record.source]} />
-        {!isGroup && (
-          <Fact
-            // SPEC 3.4 — offspring is meaningful for females; on a male it is
-            // what he sired, which is a different number and needs saying.
-            label={record.sex === "male" ? "Offspring sired" : "Offspring"}
-            value={
-              record.offspring_count === null ? null : (
-                <>
-                  {record.offspring_count}{" "}
-                  {record.offspring_updated_at && (
-                    // Always beside the number, so a stale figure looks stale.
-                    <span className="font-sans text-body-md text-text-muted">
-                      (updated {formatDate(record.offspring_updated_at)})
-                    </span>
-                  )}
-                </>
-              )
-            }
-          />
-        )}
+        {!isGroup && <OffspringFact record={record} births={births} />}
       </dl>
 
       {record.notes && (
@@ -262,6 +274,81 @@ export function RecordDetailScreen() {
               ))}
             </p>
           )}
+        </section>
+      )}
+
+      {/* SPEC 22 — where this animal came from, tappable. */}
+      {/* Only once something has actually been read back. Gating on
+          `record.birth_id` instead rendered an empty card headed "Born here"
+          while the mother was still being fetched — and permanently, for an
+          offspring whose dam has since been deleted. */}
+      {(dam || sire || birth) && (
+        <section className="card p-4 mt-2">
+          <p className="data-label">Born here</p>
+          {dam && (
+            <p className="text-body-md mt-2">
+              Mother{" "}
+              <Link to={`/records/${dam.id}`} className="data-value font-bold text-primary underline">
+                {dam.tag}
+              </Link>
+            </p>
+          )}
+          {sire ? (
+            <p className="text-body-md mt-2">
+              Father{" "}
+              <Link to={`/records/${sire.id}`} className="data-value font-bold text-primary underline">
+                {sire.tag}
+              </Link>
+            </p>
+          ) : (
+            birth?.sire_name && (
+              // An outside sire is free text and has no record to open.
+              <p className="text-body-md mt-2">Father {birth.sire_name} — not a record on this farm</p>
+            )
+          )}
+          {birth && (
+            <p className="data-label mt-2">
+              Born {formatDate(birth.date)}
+              {birth.born_count > 1 &&
+                ` · one of ${birth.born_count}, ${birth.surviving_count} surviving`}
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* SPEC 22 — her offspring, each tappable. Sold and dead ones included:
+          they are still hers, and leaving them out would disagree with the
+          total shown above. */}
+      {offspring.length > 0 && (
+        <section className="mt-4">
+          <h2 className="text-headline-sm text-primary">
+            Offspring
+            <span className="text-text-muted font-normal"> · {offspring.length}</span>
+          </h2>
+          <ul className="mt-3 grid gap-2 md:grid-cols-2">
+            {offspring.map((child) => (
+              <li key={child.id}>
+                <Link to={`/records/${child.id}`} className="card block p-4 min-h-row">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="data-value font-bold truncate">{child.tag}</p>
+                    <span className={`chip shrink-0 ${STATUS_CHIP[child.status]}`}>
+                      {child.status}
+                    </span>
+                  </div>
+                  <p className="text-body-md text-text-muted mt-1">
+                    {child.kind === "group"
+                      ? `Group · ${child.head_count} ${headUnit(child.head_count)}`
+                      : child.sex === "male"
+                        ? "Male"
+                        : child.sex === "female"
+                          ? "Female"
+                          : "Sex not recorded"}
+                    {child.date_of_birth ? ` · born ${formatDate(child.date_of_birth)}` : ""}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
@@ -417,6 +504,43 @@ function TreatmentRow({
   );
 }
 
+/**
+ * SPEC 22 — the offspring figure, as a total and what it is made of.
+ *
+ * Full width rather than half, because the breakdown is a sentence and a
+ * sentence in a half-width mono cell wraps into something nobody reads. The
+ * total gets the weight; the line under it says where each part came from,
+ * since the two halves have different origins and one of them is somebody's
+ * memory. Summing them silently would make that half unfalsifiable.
+ */
+function OffspringFact({ record, births }: { record: Record_; births: Birth[] }) {
+  const count = offspringTotal(record, births);
+  const parts = describeOffspringParts(
+    count,
+    record.offspring_baseline_updated_at
+      ? formatDate(record.offspring_baseline_updated_at)
+      : null,
+  );
+
+  return (
+    <div className="card p-3 col-span-2">
+      {/* SPEC 3.4 — offspring is meaningful for females; on a male it is what
+          he sired, which is a different number and needs saying. */}
+      <dt className="data-label">{record.sex === "male" ? "Offspring sired" : "Offspring"}</dt>
+      <dd className="mt-1">
+        {parts === null ? (
+          <span className="data-value text-text-muted">Not recorded</span>
+        ) : (
+          <>
+            <span className="data-value font-bold">{count.total}</span>
+            <span className="block text-body-md text-text-muted mt-0.5">{parts}</span>
+          </>
+        )}
+      </dd>
+    </div>
+  );
+}
+
 function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="card p-3">
@@ -450,7 +574,7 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
   const [dob, setDob] = useState(record.date_of_birth ?? "");
   const [arrival, setArrival] = useState(record.arrival_date ?? "");
   const [offspring, setOffspring] = useState(
-    record.offspring_count === null ? "" : String(record.offspring_count),
+    record.offspring_baseline === null ? "" : String(record.offspring_baseline),
   );
   const [notes, setNotes] = useState(record.notes ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -493,7 +617,7 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
     if (!isGroup) {
       changes.sex = sex;
       changes.date_of_birth = dob || null;
-      changes.offspring_count = offspringCount;
+      changes.offspring_baseline = offspringCount;
     }
 
     await updateRecord(record.id, changes);
@@ -568,15 +692,19 @@ function EditRecordDialog({ record, onClose }: { record: Record_; onClose: () =>
             </p>
 
             <label className="data-label block mt-4 mb-1" htmlFor="edit-offspring">
-              {sex === "male" ? "Offspring sired" : "Offspring"}
+              {sex === "male" ? "Offspring sired before records" : "Offspring before records"}
             </label>
             <input
               id="edit-offspring" className="field font-mono" value={offspring} inputMode="numeric"
               onChange={(e) => setOffspring(e.target.value)} placeholder="Leave blank if unknown"
             />
+            {/* SPEC 22 — what this field is *now*. It used to be the only
+                answer; recorded births are counted separately and added to it,
+                and nothing the app does ever writes over what is typed here. */}
             <p className="text-body-md text-text-muted mt-1">
-              Typed by hand, never counted for you. The date it was last changed is
-              shown beside it.
+              What happened before births were recorded in the app. Typed by hand,
+              never counted for you, and never changed by a birth — recorded
+              births are counted separately and added to this.
             </p>
           </>
         )}

@@ -1,7 +1,9 @@
+import { tagStem } from "../domain/births";
 import { announceLocalChange } from "../sync/signal";
 import { getDeviceId, newId, nowIso, todayInEAT } from "./ids";
 import { db } from "./schema";
 import type {
+  Birth,
   Death,
   DeathCause,
   EntityName,
@@ -49,6 +51,7 @@ import type {
 type Entity =
   | Room
   | Record_
+  | Birth
   | Move
   | Purchase
   | HealthRecord
@@ -198,6 +201,13 @@ export interface RecordInput {
   room_id?: string | null;
   /** The date of that first move. Defaults to today. */
   date?: string;
+  /** SPEC 22 — the parentage of an animal born here. Set by `recordBirth` and
+   *  by nothing else: a record's mother is not something a form offers to
+   *  change afterwards, because the birth event is the thing that established
+   *  it. */
+  dam_record_id?: string | null;
+  sire_record_id?: string | null;
+  birth_id?: string | null;
   /** SPEC 3.7 — recorded as a Purchase when the source is `bought`. Whole
    *  shillings; ignored for anything that was born here or given. */
   price?: number | null;
@@ -236,13 +246,18 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
     arrival_date: input.arrival_date ?? null,
     initial_head_count: head,
     head_count: head,
-    offspring_count: null,
-    offspring_updated_at: null,
+    offspring_baseline: null,
+    offspring_baseline_updated_at: null,
     source: input.source,
     status: "active",
     parent_record_id: input.parent_record_id ?? null,
     notes: input.notes ?? null,
     current_room_id: null,
+    // SPEC 22 — set only on an offspring record, by `recordBirth`. Null for
+    // everything bought, given, or already here before births were recorded.
+    dam_record_id: input.dam_record_id ?? null,
+    sire_record_id: input.sire_record_id ?? null,
+    birth_id: input.birth_id ?? null,
   };
 
   const move: Move | null = input.room_id
@@ -298,6 +313,9 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
       status: record.status,
       parent_record_id: record.parent_record_id,
       notes: record.notes,
+      dam_record_id: record.dam_record_id,
+      sire_record_id: record.sire_record_id,
+      birth_id: record.birth_id,
     });
 
     if (move) {
@@ -332,7 +350,7 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
 export type RecordEdit = Partial<
   Pick<
     Record_,
-    "tag" | "breed" | "sex" | "date_of_birth" | "arrival_date" | "notes" | "offspring_count"
+    "tag" | "breed" | "sex" | "date_of_birth" | "arrival_date" | "notes" | "offspring_baseline"
   >
 >;
 
@@ -350,8 +368,8 @@ export async function updateRecord(id: string, changes: RecordEdit): Promise<voi
     const fields: Record<string, unknown> = { ...real };
     // SPEC 3.4 — the offspring figure is stamped whenever it changes, so the
     // screen can print "2 (updated 12 Aug)" and a stale number reads as stale.
-    if ("offspring_count" in real) {
-      fields.offspring_updated_at = todayInEAT();
+    if ("offspring_baseline" in real) {
+      fields.offspring_baseline_updated_at = todayInEAT();
     }
 
     const updated = { ...existing, ...fields, updated_at: at, device_id } as Record_;
@@ -457,8 +475,8 @@ export async function recordMove(input: MoveInput): Promise<MoveOutcome> {
       parent_record_id: record.id,
       // The offspring figure belongs to the original animal, not to head split
       // out of a group, so it does not travel.
-      offspring_count: null,
-      offspring_updated_at: null,
+      offspring_baseline: null,
+      offspring_baseline_updated_at: null,
       current_room_id: input.to_room_id,
       seq: undefined,
     };
@@ -522,12 +540,313 @@ async function latestRoom(recordId: string): Promise<string | null> {
 
 /** SPEC 4.3 — derive the split's tag, e.g. `P-Weaners` becomes `P-Weaners-2`. */
 async function deriveSplitTag(baseTag: string): Promise<string> {
-  const root = baseTag.replace(/-(\d+)$/, "");
-  const siblings = await db.records.filter((r) => r.tag.startsWith(`${root}-`)).toArray();
-  let suffix = 2;
+  const [tag] = await nextSequentialTags(baseTag, 1, 2);
+  return tag!;
+}
+
+/**
+ * The next free tags in a sequence.
+ *
+ * SPEC 4.3 derives a split's tag this way and SPEC 22 wants offspring tagged
+ * the same, so the rule lives once. This is the half that knows which tags are
+ * taken; `sequentialTags` in `domain/births.ts` is the pure arithmetic, and is
+ * where the numbering rule is tested.
+ *
+ * Every tag on the device is consulted, not just the active ones. A sold
+ * animal's tag may legitimately be reused (SPEC 6.5), but handing a newborn the
+ * tag of the cow sold last month would make its history unreadable for anyone
+ * looking back — and reuse is a decision, not something to arrive at by
+ * accident.
+ */
+export async function nextSequentialTags(
+  baseTag: string,
+  howMany: number,
+  startAt = 1,
+): Promise<string[]> {
+  // The pure half of this rule, and the reason a trailing `-084` is kept while
+  // a trailing `-1` is replaced, is `tagStem` in `domain/births.ts`.
+  const stem = tagStem(baseTag);
+  const siblings = await db.records.filter((r) => r.tag.startsWith(`${stem}-`)).toArray();
   const taken = new Set(siblings.map((r) => r.tag));
-  while (taken.has(`${root}-${suffix}`)) suffix += 1;
-  return `${root}-${suffix}`;
+
+  const out: string[] = [];
+  let suffix = startAt;
+  while (out.length < howMany) {
+    const candidate = `${stem}-${suffix}`;
+    if (!taken.has(candidate)) {
+      out.push(candidate);
+      taken.add(candidate);
+    }
+    suffix += 1;
+  }
+  return out;
+}
+
+
+// ---------------------------------------------------------------------------
+// Births — SPEC 22
+// ---------------------------------------------------------------------------
+
+/** One offspring, as the form describes it. */
+export interface OffspringInput {
+  tag: string;
+  sex?: Sex | null;
+  /** False for one that did not survive. Those get a record and a Death with
+   *  cause `stillbirth`, rather than no record at all. */
+  survived: boolean;
+  breed?: string | null;
+  notes?: string | null;
+}
+
+export interface BirthInput {
+  dam_record_id: string;
+  /** A record on this farm. */
+  sire_record_id?: string | null;
+  /** Free text, for an outside sire. */
+  sire_name?: string | null;
+  date: string;
+  born_count: number;
+  surviving_count: number;
+  vet_id?: string | null;
+  notes?: string | null;
+  /**
+   * The offspring to create.
+   *
+   * One or two individual animals, or a single entry standing for a group
+   * (SPEC 22). Empty is allowed and is not a mistake: a birth where nothing
+   * survived has losses to record and no animals to create, and the Death rows
+   * still land.
+   */
+  offspring: OffspringInput[];
+  /** True when the single entry above describes a group rather than an animal
+   *  — a hatch, or a litter too large to tag one by one. */
+  as_group?: boolean;
+}
+
+export interface BirthOutcome {
+  birth: Birth;
+  offspring: Record_[];
+  /** The stillbirth rows, one per record that lost head at birth. */
+  deaths: Death[];
+}
+
+/**
+ * Record a birth. SPEC 22.
+ *
+ * Everything happens in one transaction, and the list is deliberately long:
+ * the birth event, a record per offspring, the initial move that puts each of
+ * them in the dam's room, and a Death with cause `stillbirth` for anything that
+ * did not survive. A tab closed halfway through must not leave a calf with no
+ * date of birth, or a loss with nothing recording it — which are precisely the
+ * two silent failures this feature exists to end.
+ *
+ * Three decisions worth stating, because each had a plausible alternative:
+ *
+ * **Every offspring born gets a record, not only the survivors.** The
+ * stillbirth Death has to hang off something, and the only other candidate was
+ * the dam — which would have reduced *her* head count and, for a single animal,
+ * marked the mother dead. A record for an animal that did not live looks
+ * strange for a moment and is the honest shape: it holds one date, one cause,
+ * and it keeps the farm's mortality figures complete.
+ *
+ * **The dam's own record is not touched.** Her head count is derived from what
+ * left her record (SPEC 3.4), and giving birth takes nothing out of her. Her
+ * offspring figure is not written either: the typed baseline stays as typed and
+ * the total is worked out at display time by `offspringTotal`. Two sources of
+ * truth is exactly what SPEC 22 forbids.
+ *
+ * **The offspring are placed in the dam's current room**, including the ones
+ * that did not survive. That is where the birth happened, and occupancy counts
+ * only active records (SPEC 4.2), so a stillborn record placed in a room adds
+ * nothing to its count. A dam who is in no room yet gives her offspring no
+ * move, rather than an invented one.
+ */
+export async function recordBirth(input: BirthInput): Promise<BirthOutcome> {
+  const device_id = await getDeviceId();
+  const at = nowIso();
+  const date = input.date;
+
+  return db.transaction(
+    "rw",
+    [db.records, db.births, db.moves, db.deaths, db.outbox],
+    async () => {
+      const dam = await db.records.get(input.dam_record_id);
+      if (!dam) throw new Error(`No record ${input.dam_record_id}`);
+      // The screens only offer this on a female animal or a group, but a stale
+      // tab could still arrive here (SPEC 22).
+      if (dam.kind === "animal" && dam.sex !== "female") {
+        throw new Error(`${dam.tag} is not recorded as female, so no birth can be logged against it`);
+      }
+      if (input.surviving_count > input.born_count) {
+        throw new Error("More surviving than born");
+      }
+
+      const birth: Birth = {
+        id: newId(),
+        created_at: at,
+        updated_at: at,
+        device_id,
+        deleted_at: null,
+        dam_record_id: dam.id,
+        sire_record_id: input.sire_record_id ?? null,
+        sire_name: input.sire_name?.trim() || null,
+        date,
+        born_count: input.born_count,
+        surviving_count: input.surviving_count,
+        vet_id: input.vet_id ?? null,
+        notes: input.notes?.trim() || null,
+      };
+
+      await db.births.add(birth);
+      // Queued first, so the server sees the birth before the records that
+      // point at it. Its `birth_id` carries no foreign key precisely so that a
+      // batch arriving out of order costs the link rather than the animal —
+      // but the ordinary case should not rely on that.
+      await enqueue(db, "insert", "birth", birth, {
+        dam_record_id: birth.dam_record_id,
+        sire_record_id: birth.sire_record_id,
+        sire_name: birth.sire_name,
+        date: birth.date,
+        born_count: birth.born_count,
+        surviving_count: birth.surviving_count,
+        vet_id: birth.vet_id,
+        notes: birth.notes,
+      });
+
+      const offspring: Record_[] = [];
+      const deaths: Death[] = [];
+
+      for (const entry of input.offspring) {
+        const isGroup = input.as_group === true;
+        // A group entry stands for every offspring at once, so it is created
+        // holding all of them and the stillbirths are taken back out below.
+        const head = isGroup ? input.born_count : 1;
+
+        const record: Record_ = {
+          id: newId(),
+          created_at: at,
+          updated_at: at,
+          device_id,
+          deleted_at: null,
+          kind: isGroup ? "group" : "animal",
+          // SPEC 22 — species and breed are inherited from the dam. The breed
+          // on the form wins if it was changed, because a cross is a real
+          // thing and the sire is half of it.
+          species: dam.species,
+          tag: entry.tag,
+          breed: entry.breed ?? dam.breed ?? null,
+          sex: isGroup ? null : entry.sex ?? null,
+          // The whole point of the feature: an exact date of birth, so the
+          // treatment schedule fires and sale readiness computes (SPEC 13.4).
+          date_of_birth: isGroup ? null : date,
+          // For a group, age is counted from arrival (SPEC 13.3), and for a
+          // group born here the day it was born *is* the day it arrived.
+          arrival_date: date,
+          initial_head_count: head,
+          head_count: head,
+          offspring_baseline: null,
+          offspring_baseline_updated_at: null,
+          source: "born_here",
+          status: "active",
+          parent_record_id: null,
+          notes: entry.notes?.trim() || null,
+          current_room_id: dam.current_room_id,
+          dam_record_id: dam.id,
+          sire_record_id: input.sire_record_id ?? null,
+          birth_id: birth.id,
+        };
+
+        await db.records.add(record);
+        await enqueue(db, "upsert", "record", record, {
+          kind: record.kind,
+          species: record.species,
+          tag: record.tag,
+          breed: record.breed,
+          sex: record.sex,
+          date_of_birth: record.date_of_birth,
+          arrival_date: record.arrival_date,
+          initial_head_count: record.initial_head_count,
+          source: record.source,
+          status: record.status,
+          parent_record_id: record.parent_record_id,
+          notes: record.notes,
+          dam_record_id: record.dam_record_id,
+          sire_record_id: record.sire_record_id,
+          birth_id: record.birth_id,
+        });
+
+        // SPEC 22 — placed in the dam's current room, as an initial move.
+        if (dam.current_room_id) {
+          const move: Move = {
+            id: newId(),
+            created_at: at,
+            updated_at: at,
+            device_id,
+            deleted_at: null,
+            record_id: record.id,
+            from_room_id: null, // SPEC 3.5 — an initial placement has no origin.
+            to_room_id: dam.current_room_id,
+            date,
+            count: head,
+            reason: "new_arrival",
+            note: null,
+          };
+          await db.moves.add(move);
+          await enqueue(db, "insert", "move", move, moveFields(move));
+        }
+
+        // SPEC 22 — losses at birth do not vanish. The difference between born
+        // and surviving becomes a Death with cause `stillbirth`, so it is in
+        // the mortality figures under a cause that says what happened.
+        const lost = isGroup
+          ? input.born_count - input.surviving_count
+          : entry.survived
+            ? 0
+            : 1;
+
+        if (lost > 0) {
+          const death: Death = {
+            id: newId(),
+            created_at: at,
+            updated_at: at,
+            device_id,
+            deleted_at: null,
+            record_id: record.id,
+            date,
+            count: lost,
+            cause: "stillbirth",
+            vet_id: input.vet_id ?? null,
+            notes: null,
+          };
+          await db.deaths.add(death);
+          await enqueue(db, "insert", "death", death, {
+            record_id: death.record_id,
+            date: death.date,
+            count: death.count,
+            cause: death.cause,
+            vet_id: death.vet_id,
+            notes: death.notes,
+          });
+
+          // The local count drops so the screen is right immediately; it is
+          // never pushed, because the server derives it from these same events
+          // (SPEC 3.4, 6.7).
+          const after = leavingUpdate(record, lost, "dead");
+          await db.records.put(after);
+          if (after.status !== record.status) {
+            await enqueue(db, "upsert", "record", after, { status: after.status });
+          }
+          offspring.push(after);
+          deaths.push(death);
+          continue;
+        }
+
+        offspring.push(record);
+      }
+
+      return { birth, offspring, deaths };
+    },
+  );
 }
 
 

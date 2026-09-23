@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field
 STATE_ENTITIES = {"room", "record", "treatment_schedule", "vet_visit", "store", "produce_type"}
 EVENT_ENTITIES = {
     "move", "sale", "death", "purchase", "health_record", "expense", "visit_note",
+    # SPEC 22. A birth happened on a day; a mistake is corrected by adding
+    # another row, never by editing this one.
+    "birth",
     # SPEC 20.13. Intakes, outtakes and counts are append-only: the balance is
     # derived by folding them (SPEC 20.8), so an edited event would silently
     # restate a balance rather than correct it. A mistake is corrected by adding
@@ -24,7 +27,7 @@ SYNCED_ENTITIES = STATE_ENTITIES | EVENT_ENTITIES
 EntityName = Literal[
     "room", "record", "move", "sale", "death", "purchase", "health_record",
     "expense_category", "customer", "vet", "expense", "treatment_schedule",
-    "vet_visit", "visit_note",
+    "vet_visit", "visit_note", "birth",
     "store", "produce_type", "stock_intake", "stock_outtake", "stock_count",
 ]
 

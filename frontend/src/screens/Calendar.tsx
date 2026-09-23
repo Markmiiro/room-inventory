@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { BackIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import {
+  allBirths,
   allDeaths,
   allHealth,
   allSchedules,
@@ -15,6 +16,7 @@ import {
 } from "../db/queries";
 import { db } from "../db/schema";
 import type {
+  Birth,
   Death,
   HealthRecord,
   Move,
@@ -68,6 +70,8 @@ export function CalendarScreen() {
   const schedules = useLiveQuery(allSchedules, [], [] as TreatmentSchedule[]);
   const visits = useLiveQuery(allVetVisits, [], [] as VetVisit[]);
   const vets = useLiveQuery(() => db.vets.toArray(), [], [] as Vet[]);
+  // SPEC 22 — births on their date.
+  const births = useLiveQuery(allBirths, [], [] as Birth[]);
 
   const events = useMemo(
     () =>
@@ -82,9 +86,10 @@ export function CalendarScreen() {
         schedules,
         visits,
         vets,
+        births,
         today,
       }),
-    [records, rooms, moves, purchases, health, sales, deaths, schedules, visits, vets, today],
+    [records, rooms, moves, purchases, health, sales, deaths, schedules, visits, vets, births, today],
   );
   const byDate = useMemo(() => eventsByDate(events), [events]);
 
@@ -152,6 +157,18 @@ export function CalendarScreen() {
         ))}
       </ul>
 
+      {/* SPEC 22 — Log birth is reachable from the Calendar as well as from a
+          record, because a morning's births are entered by date rather than by
+          walking to each mother in turn. The selected day is carried through,
+          so a birth found in the records for last Tuesday is logged for last
+          Tuesday. */}
+      <Link
+        to={`/birth?date=${selected}`}
+        className="btn-secondary w-full mt-4 md:max-w-xs"
+      >
+        Log birth
+      </Link>
+
       {view === "month" ? (
         <>
           <div className="card mt-4 p-2">
@@ -206,6 +223,18 @@ const DOT: Record<CalendarKind, string> = {
   move: "bg-text-muted",
   death: "bg-text",
   visit: "bg-primary-container",
+  /**
+   * The palest of the eight tokens, and the only one left that is not already
+   * a dot here.
+   *
+   * TOKENS.md allows eight colours and this row now needs seven of them, so the
+   * three greens are close by the time they reach a 10px dot. That is why SPEC
+   * 4.7 has the legend name every marker in words and why a day's dots are
+   * summarised in its accessible label: colour is not the signal, it is the
+   * shorthand. `success-text` was tried here first and sat between the sale and
+   * visit greens, which made three dots nobody could separate.
+   */
+  birth: "bg-success",
 };
 
 function Dot({ kind }: { kind: CalendarKind }) {

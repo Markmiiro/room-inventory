@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     # "production" makes the checks in `verify()` fatal. Railway sets it.
     app_env: str = "development"
 
+    # SPEC 21 — whether the API demands a token at all.
+    #
+    # Default false: the app is used by one household on one farm, and a login
+    # screen standing between a person and the animal in front of them was
+    # costing more than it bought. Turning it back on is this one variable, set
+    # from the host's dashboard — the auth code, the users table and the login
+    # rate limiter are all still here, so nothing needs rebuilding.
+    #
+    # What false costs is written down plainly in the README and in SPEC 21:
+    # anyone who finds the backend URL can read and write every record. The
+    # variable is the whole control, so it must be readable as such.
+    auth_enabled: bool = False
+
     database_url: str = DEV_DATABASE_URL
     jwt_secret: str = DEV_JWT_SECRET
     allowed_origins: str = "http://localhost:5173"
@@ -102,10 +115,16 @@ class Settings(BaseSettings):
             return
 
         problems: list[str] = []
-        if not self.jwt_secret or self.jwt_secret == DEV_JWT_SECRET:
+        # Only load-bearing when tokens are actually being minted. With auth
+        # off nothing is signed, and demanding a secret to sign nothing would
+        # be a boot failure with no security behind it.
+        if self.auth_enabled and (not self.jwt_secret or self.jwt_secret == DEV_JWT_SECRET):
             problems.append("JWT_SECRET is unset or still the development value")
         if not self.database_url or self.database_url == DEV_DATABASE_URL:
             problems.append("DATABASE_URL is unset or still the development value")
+        # Required whether or not auth is on, and *more* so when it is off:
+        # with no token to check, the origin restriction and the obscurity of
+        # the URL are the only things left (SPEC 21).
         if not self.allowed_origins.strip() or "localhost" in self.allowed_origins:
             problems.append("ALLOWED_ORIGINS is unset or still points at localhost")
         # INITIAL_PASSWORD_HASH is deliberately not required: SPEC 8 allows a

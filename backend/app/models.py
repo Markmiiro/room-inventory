@@ -100,8 +100,19 @@ class Record(StateMixin, Base):
     initial_head_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     head_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
-    offspring_count: Mapped[int | None] = mapped_column(Integer)
-    offspring_updated_at: Mapped[date | None] = mapped_column(Date)
+    # SPEC 22 — the hand-typed figure, renamed.
+    #
+    # It was `offspring_count`, and it was the only answer the app had. Now that
+    # births are recorded it is the *baseline*: what happened before there were
+    # birth records, typed by somebody who was there. The total shown on screen
+    # is this plus the births counted, and this value is never written by the
+    # app — a birth adds a Birth row and leaves what was typed alone.
+    #
+    # Renaming it rather than reusing the old name is the point. A field called
+    # `offspring_count` that no longer holds the offspring count is how a screen
+    # ends up displaying one of the two numbers and calling it the other.
+    offspring_baseline: Mapped[int | None] = mapped_column(Integer)
+    offspring_baseline_updated_at: Mapped[date | None] = mapped_column(Date)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default="active")
     parent_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
@@ -110,6 +121,24 @@ class Record(StateMixin, Base):
     # Cache of the destination of the latest move. Recomputed, never trusted
     # as the source of truth (SPEC 3.4, 4.1).
     current_room_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("rooms.id"))
+
+    # SPEC 22 — where this animal came from, when it was born here.
+    #
+    # All three are null for everything bought, given, or already on the farm
+    # before births were recorded, which is most of the herd and always will be
+    # for the animals that predate this.
+    dam_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
+    sire_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
+    # Deliberately *not* a foreign key, unlike the two above.
+    #
+    # The dam and the sire exist long before the birth does. The birth row is
+    # created in the same push batch as the offspring, one operation earlier,
+    # and each operation in a batch lands in its own savepoint (see
+    # `sync.apply_push`). A constraint here would turn any reordering — a
+    # retried batch, a client that queued them apart — into a rejected
+    # offspring record: the animal itself lost to keep a link tidy. The link is
+    # worth having and it is not worth that.
+    birth_id: Mapped[str | None] = mapped_column(String(26))
 
 
 # --------------------------------------------------------------------------
@@ -339,6 +368,45 @@ class Death(SyncMixin, Base):
     date: Mapped[date] = mapped_column(Date, nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     cause: Mapped[str] = mapped_column(String(16), nullable=False)
+    vet_id: Mapped[str | None] = mapped_column(String(26))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class Birth(SyncMixin, Base):
+    """SPEC 22 — an animal born on this farm.
+
+    The gap this closes is a silent one. An animal born here had no date of
+    birth, because nothing recorded the day it was born; and with no date of
+    birth its treatment schedule never fires and its sale readiness never
+    computes (SPEC 13.4, 15.3). The app went quiet about the animals it knew
+    most about.
+
+    An **event**, and append-only like every other: a birth happened on a day,
+    and a mistake is corrected by adding rather than by editing. That is also
+    what makes it safe for two devices to record the same morning's births
+    offline — the merge is the union, and a duplicate is visible as two births
+    rather than resolved into one wrong one.
+
+    ``surviving_count`` is never more than ``born_count``. Where it is fewer,
+    the client writes a Death for the difference with cause ``stillbirth`` in
+    the same transaction, so a loss at birth is in the mortality figures rather
+    than nowhere (SPEC 22).
+    """
+
+    __tablename__ = "births"
+
+    dam_record_id: Mapped[str] = mapped_column(
+        String(26), ForeignKey("records.id"), nullable=False, index=True
+    )
+    # A record on this farm, when the sire is one of ours.
+    sire_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
+    # Free text, for a sire that is somebody else's animal. Both may be null:
+    # plenty of births have no recorded father, and inventing one would be worse
+    # than leaving it blank.
+    sire_name: Mapped[str | None] = mapped_column(Text)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    born_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    surviving_count: Mapped[int] = mapped_column(Integer, nullable=False)
     vet_id: Mapped[str | None] = mapped_column(String(26))
     notes: Mapped[str | None] = mapped_column(Text)
 

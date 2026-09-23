@@ -1,6 +1,7 @@
 import { getDeviceId } from "../db/ids";
 import { META, db, getMeta, setMeta } from "../db/schema";
 import type {
+  Birth,
   Customer,
   Death,
   EntityName,
@@ -23,7 +24,7 @@ import type {
   VetVisit,
   VisitNote,
 } from "../db/types";
-import { ApiError, pullChanges, pushOperations } from "./api";
+import { ApiError, pullChanges, pushOperations, refreshAuthState } from "./api";
 import { onLocalChange } from "./signal";
 
 /**
@@ -126,6 +127,11 @@ export class SyncEngine {
     this.running = true;
     try {
       await this.emit({ state: "syncing" });
+      // SPEC 21 — before anything is sent, so a flag flipped on the host is
+      // noticed on the next tick rather than only after a 401. It swallows its
+      // own failures: with no network the cached answer stands and the sync
+      // carries on to fail for the real reason.
+      await refreshAuthState();
       await this.drainOutbox();
       await this.pull();
       await setMeta(META.lastSyncAt, new Date().toISOString());
@@ -233,6 +239,16 @@ export class SyncEngine {
             db.treatmentSchedules,
             db.vetVisits,
             db.visitNotes,
+            // SPEC 22. And the five store tables below, which were missing:
+            // Dexie refuses a write to a table the transaction did not name, so
+            // a pull carrying stock events threw rather than landing — and the
+            // engine reported a failed sync with no hint of which table.
+            db.births,
+            db.stores,
+            db.produceTypes,
+            db.stockIntakes,
+            db.stockOuttakes,
+            db.stockCounts,
             db.meta,
             db.outbox,
           ],
@@ -363,6 +379,11 @@ export async function applyServerRow(
     case "visit_note": {
       // An event: a pulled note can only ever be new.
       await db.visitNotes.put(data as unknown as VisitNote);
+      return;
+    }
+    // SPEC 22 — a birth is an event, so a pulled row can only ever be new.
+    case "birth": {
+      await db.births.put(data as unknown as Birth);
       return;
     }
     // SPEC 20.13 — stores and produce types are state entities with per-field

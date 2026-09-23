@@ -45,12 +45,18 @@ def db(migrated_database):
     # a test that passes alone and fails in the suite. `CASCADE` handles the
     # foreign keys between them, and the seeded rows a migration wrote go too —
     # tests that need rooms or schedules push their own.
+    #
+    # `stores` and `produce_types` are deliberately absent: migration 0010 seeds
+    # two stores and three produce types at fixed ids, and SPEC 20's tests are
+    # written against those rather than pushing their own. Truncating them would
+    # take the seed with it.
     with engine.begin() as conn:
         conn.execute(
             text(
                 "TRUNCATE moves, sales, deaths, purchases, health_records, "
                 "expenses, expense_categories, customers, vets, "
-                "visit_notes, vet_visits, treatment_schedules, records, rooms, "
+                "visit_notes, vet_visits, treatment_schedules, births, "
+                "records, rooms, "
                 "sync_anomalies, refresh_tokens, users RESTART IDENTITY CASCADE"
             )
         )
@@ -208,6 +214,27 @@ def op_visit_note(id_: str, at: str, visit_id: str, record_id: str, note: str = 
         "entity": "visit_note",
         "id": id_,
         "data": {"visit_id": visit_id, "record_id": record_id, "note": note},
+        "updated_at": at,
+    }
+
+
+def op_birth(id_: str, at: str, dam_record_id: str, **fields):
+    data = {
+        "dam_record_id": dam_record_id,
+        "date": "2026-08-31",
+        "born_count": 1,
+        "surviving_count": 1,
+    }
+    data.update(fields)
+    return {"op": "insert", "entity": "birth", "id": id_, "data": data, "updated_at": at}
+
+
+def op_death(id_: str, at: str, record_id: str, count: int = 1, cause: str = "illness"):
+    return {
+        "op": "insert",
+        "entity": "death",
+        "id": id_,
+        "data": {"record_id": record_id, "date": "2026-08-31", "count": count, "cause": cause},
         "updated_at": at,
     }
 

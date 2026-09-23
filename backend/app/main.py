@@ -17,11 +17,14 @@ from sqlalchemy.orm import Session
 
 from app import sync
 from app.auth import (
+    auth_is_enabled,
     ensure_user,
     get_user,
+    guard_auth_route,
     hash_password,
     issue_refresh_token,
     require_auth,
+    require_auth_if_enabled,
     revoke_all_refresh_tokens,
     rotate_refresh_token,
     verify_password,
@@ -82,6 +85,37 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def https_only(request: Request, call_next):
+    """HTTPS only, HSTS on (SPEC 8) — and not conditional on SPEC 21's flag.
+
+    With ``AUTH_ENABLED`` false there is no token on the wire, so the transport
+    is carrying the whole of the farm's records in the clear if it is allowed to
+    be plain HTTP. That makes this *more* necessary when auth is off, not less.
+
+    Railway terminates TLS in front of the app, so the scheme the app sees is
+    the proxy's. ``x-forwarded-proto`` is what the request actually arrived on;
+    absent, nothing is assumed, because a local run has no proxy in front of it.
+    """
+    if get_settings().is_production:
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        if forwarded and forwarded != "https":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "https_required",
+                    "title": "This API is served over HTTPS only",
+                },
+            )
+
+    response = await call_next(request)
+    if get_settings().is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 @app.exception_handler(HTTPException)
 async def problem_detail_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """RFC 7807 problem details with a machine-readable `code` (SPEC 7).
@@ -115,6 +149,22 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/config")
+def client_config() -> dict[str, bool]:
+    """What the client needs to know before it can ask for anything (SPEC 21).
+
+    Unauthenticated by necessity: its whole purpose is to say whether a token is
+    required, and a client that had to authenticate to find that out could never
+    use the answer. It carries one boolean and nothing about the farm.
+
+    Without it the app would have to guess. A build that assumed auth was off
+    would show no way to sign in against a server that wants one, and a build
+    that assumed it was on would put a password box in front of somebody who
+    does not have a password. The server is the only thing that knows.
+    """
+    return {"auth_enabled": auth_is_enabled()}
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -124,7 +174,11 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
 def login(
     body: LoginRequest, request: Request, db: Session = Depends(get_db)
 ) -> TokenPair:
+    # The rate limit runs before the switch is consulted, and stays in place
+    # whatever the switch says (SPEC 21). An unauthenticated deployment is
+    # exactly the one where a probe of this route should not be free.
     login_rate_limit(request)  # SPEC 8 — 5 attempts per 15 minutes per IP
+    guard_auth_route()
 
     user = ensure_user(db)
     if user is None or not verify_password(body.password, user.password_hash):
@@ -140,6 +194,7 @@ def login(
 
 @app.post("/auth/refresh", response_model=TokenPair)
 def refresh_tokens(body: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair:
+    guard_auth_route()
     new_refresh = rotate_refresh_token(db, body.refresh_token)
     access, expires_in = _issue(db)
     db.commit()
@@ -152,6 +207,11 @@ def change_password(
     db: Session = Depends(get_db),
     _: str = Depends(require_auth),
 ) -> None:
+    # Deliberately still behind `require_auth` rather than the conditional one:
+    # changing the password is a credential operation, and it is not something
+    # an unauthenticated caller should be able to do to a deployment whose owner
+    # may be about to turn auth back on.
+    guard_auth_route()
     user = get_user(db)
     if user is None or not verify_password(body.current_password, user.password_hash):
         raise HTTPException(
@@ -179,7 +239,7 @@ def _issue(db: Session) -> tuple[str, int]:
 def sync_push(
     body: PushRequest,
     db: Session = Depends(get_db),
-    _: str = Depends(require_auth),
+    _: str | None = Depends(require_auth_if_enabled),
 ) -> PushResponse:
     results = sync.apply_push(db, body.device_id, body.operations)
     db.commit()
@@ -193,7 +253,7 @@ def sync_pull(
     since: int = Query(0, ge=0),
     limit: int = Query(500, ge=1, le=1000),
     db: Session = Depends(get_db),
-    _: str = Depends(require_auth),
+    _: str | None = Depends(require_auth_if_enabled),
 ) -> PullResponse:
     changes, cursor, has_more = sync.pull_changes(db, since, limit)
     return PullResponse(
@@ -203,7 +263,7 @@ def sync_pull(
 
 @app.get("/sync/anomalies")
 def sync_anomalies(
-    db: Session = Depends(get_db), _: str = Depends(require_auth)
+    db: Session = Depends(get_db), _: str | None = Depends(require_auth_if_enabled)
 ) -> list[dict]:
     """Merges the server had to paper over, so the client can raise them as alerts.
 

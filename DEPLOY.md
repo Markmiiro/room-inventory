@@ -36,10 +36,43 @@ railway run psql "$DATABASE_URL" -c "show server_version;"     # expect 16.x
 | Variable | Value | If it is wrong |
 |---|---|---|
 | `APP_ENV` | `production` | **Without this none of the other checks run.** Set it first. |
-| `JWT_SECRET` | 32+ random bytes, unique to this deployment | Startup refuses. Anyone with the repo could mint tokens. |
+| `AUTH_ENABLED` | `false` is the default — read the section below before leaving it | Nothing refuses to start. With it false the API is open to anyone with the URL |
+| `JWT_SECRET` | 32+ random bytes, unique to this deployment | Startup refuses **when `AUTH_ENABLED=true`**. Anyone with the repo could mint tokens |
 | `DATABASE_URL` | Railway's Postgres URL, pasted as-is | Startup refuses |
-| `ALLOWED_ORIGINS` | the app's own origin, e.g. `https://rooms.example` | Startup refuses if it is unset or still localhost |
+| `ALLOWED_ORIGINS` | the app's own origin, e.g. `https://rooms.example` | Startup refuses if it is unset or still localhost — whatever `AUTH_ENABLED` says |
 | `INITIAL_PASSWORD_HASH` | Argon2id hash of the farm's password | Not required — see below |
+
+### `AUTH_ENABLED`, and what false costs
+
+**It defaults to false, and with it false anyone who finds this backend's URL
+can read and write every record** — purchase prices, sale prices, customers,
+profit, every animal and every store. The sync endpoints accept pushes, so that
+includes changing and deleting what is there. The URL is the only secret, and a
+URL is not a secret: it is in browser history, in logs, in the frontend bundle
+that names it, and in the hands of anyone who has ever had the link.
+
+That is the trade, stated here so it is not discovered from the consequences.
+SPEC 21 is the decision.
+
+Three things stay on either way, because with no token to check they are what is
+left:
+
+- **HTTPS and HSTS.** In production a request that arrived over plain HTTP is
+  refused with code `https_required`, and every response carries
+  `Strict-Transport-Security`.
+- **`ALLOWED_ORIGINS`.** Startup still refuses an unset or localhost value.
+- **The login rate limiter**, five attempts per fifteen minutes per IP, applied
+  to `/auth/login` even while login is switched off.
+
+**To turn authentication on:** set `AUTH_ENABLED=true` and
+`INITIAL_PASSWORD_HASH`, and restart. No rebuild, no migration, no frontend
+deploy — the client asks `GET /config` on every sync tick and a 401 makes the
+password box reappear on a device that was offline when you changed it. Local
+data is untouched throughout (SPEC 8).
+
+`GET /config` is unauthenticated by necessity: it answers whether a token is
+required, which a client could not ask for if it needed one. It carries one
+boolean and nothing about the farm.
 
 Generate the secret and the hash:
 
@@ -103,7 +136,10 @@ phone offline for a week is the only copy of its own writes.
 ## After every deploy
 
 - [ ] `GET /health` returns `{"status":"ok"}` — wire it to Railway's health check
-- [ ] Log in once with the real password
+- [ ] `AUTH_ENABLED` is what you meant it to be. `curl https://<backend>/config`
+      answers `{"auth_enabled": …}` — if that says `false`, the URL you just
+      curled is all anyone needs to read and change every record
+- [ ] With `AUTH_ENABLED=true`: log in once with the real password
 - [ ] `APP_ENV=production` is set (without it the safety checks are inert)
 - [ ] HTTPS enforced, HSTS on
 - [ ] Open the app on a phone, then turn the phone's radio off and reopen it —
@@ -118,7 +154,8 @@ phone offline for a week is the only copy of its own writes.
 **One instance only.** The login rate limiter (SPEC 8: five attempts per fifteen
 minutes) is an in-process counter. Scale past one replica and an attacker gets
 five attempts *per replica*. Moving it to Postgres is the fix; until then, keep
-the replica count at one.
+the replica count at one. This still applies with `AUTH_ENABLED=false`: the
+limiter is on the route either way.
 
 **`seq` is a single database-wide sequence.** Restoring a dump into a database
 whose sequence is behind will hand out `seq` values clients have already seen,

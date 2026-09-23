@@ -3,7 +3,7 @@ import { useState } from "react";
 import { db } from "../db/schema";
 import { login } from "../sync/api";
 import { STALE_SYNC_MS, syncEngine, type SyncStatus } from "../sync/engine";
-import { useLiveQuery, useSyncStatus } from "../sync/useSync";
+import { useAuthState, useLiveQuery, useSyncStatus } from "../sync/useSync";
 import { CheckIcon, CloudOffIcon, SyncIcon, WarningIcon } from "./Icons";
 
 /** The queue, read live.
@@ -98,6 +98,7 @@ export function describeSyncStatus(
 function SyncPanel({ onClose }: { onClose: () => void }) {
   const status = useSyncStatus();
   const { pending } = usePendingQueue();
+  const authState = useAuthState();
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -146,8 +147,31 @@ function SyncPanel({ onClose }: { onClose: () => void }) {
         </button>
       </div>
 
-      {/* SPEC 8 — an expired session never wipes local data; it just asks for a
-          password the next time the app reaches the server. */}
+      {/**
+        * SPEC 21 — the sign-in control exists only while the server asks for one.
+        *
+        * There is no login screen and never was one on this app: signing in has
+        * always lived here, beside the thing it affects. With `AUTH_ENABLED`
+        * false the server wants no password, so offering a box would be asking
+        * for something nobody has — and the honest thing to show instead is
+        * what that costs, in words, where the person using it can see it.
+        *
+        * `unknown` keeps the box. A device that has never reached the server
+        * cannot tell the two apart, and hiding the only way to sign in is the
+        * worse of the two mistakes: it is unrecoverable from the phone, while a
+        * password box on a server that wants none merely says so when used.
+        */}
+      {authState === "off" ? (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-body-md text-text-muted">
+            This server does not ask for a password. Anyone who knows its address
+            can read and change every record — prices, customers and profit
+            included.
+          </p>
+        </div>
+      ) : (
+      /* SPEC 8 — an expired session never wipes local data; it just asks for a
+          password the next time the app reaches the server. */
       <div className="mt-4 border-t border-border pt-3">
         <label className="data-label block mb-1" htmlFor="sync-password">
           Password
@@ -170,6 +194,7 @@ function SyncPanel({ onClose }: { onClose: () => void }) {
         </button>
         {message && <p className="text-body-md text-text-muted mt-2">{message}</p>}
       </div>
+      )}
 
       <button
         type="button"

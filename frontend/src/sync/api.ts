@@ -105,6 +105,72 @@ function notJson(response: Response): ApiError {
   );
 }
 
+/**
+ * SPEC 21 — whether this server asks for a password.
+ *
+ * Three values, and the third is not a placeholder. `unknown` is the state of
+ * a device that has not reached the server since it was installed, which on
+ * this app is an ordinary state rather than a startup blip: the whole point is
+ * that it works for days with no signal. So the value is cached in
+ * localStorage and survives a restart, and the UI is written to cope with not
+ * knowing yet.
+ *
+ * It is never guessed from a build-time variable. The server is the only thing
+ * that knows, and a frontend deployed against a server whose flag was later
+ * flipped would otherwise be confidently wrong in whichever direction it was
+ * built — either hiding the only way to sign in, or asking for a password
+ * nobody has.
+ */
+export type AuthState = "required" | "off" | "unknown";
+
+const AUTH_STATE_KEY = "auth_state";
+
+function readStoredAuthState(): AuthState {
+  const stored = localStorage.getItem(AUTH_STATE_KEY);
+  return stored === "required" || stored === "off" ? stored : "unknown";
+}
+
+let authState: AuthState = readStoredAuthState();
+const authListeners = new Set<(state: AuthState) => void>();
+
+export function getAuthState(): AuthState {
+  return authState;
+}
+
+/** Subscribe to changes, so the sync panel stops offering a password box the
+ *  moment the server says it does not want one. */
+export function onAuthStateChange(listener: (state: AuthState) => void): () => void {
+  authListeners.add(listener);
+  return () => authListeners.delete(listener);
+}
+
+function setAuthState(next: AuthState): void {
+  if (next === authState) return;
+  authState = next;
+  localStorage.setItem(AUTH_STATE_KEY, next);
+  for (const listener of authListeners) listener(next);
+}
+
+/**
+ * Ask the server whether it wants a token (SPEC 21).
+ *
+ * Unauthenticated, one boolean, and safe to call on every sync tick. A failure
+ * is not an error the user needs to see — it means there is no network, which
+ * is the normal state in a building with no coverage — so the cached answer
+ * stands and the caller carries on.
+ */
+export async function refreshAuthState(): Promise<AuthState> {
+  try {
+    const config = await request<{ auth_enabled: boolean }>("/config", {}, false);
+    setAuthState(config.auth_enabled ? "required" : "off");
+  } catch {
+    // Keep what we had. An old answer is better than a guess, and a wrong
+    // guess here either hides sign-in or demands a password that does not
+    // exist.
+  }
+  return authState;
+}
+
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
@@ -133,7 +199,11 @@ async function request<T>(path: string, init: RequestInit = {}, retryOn401 = tru
       ...init,
       headers: {
         "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        // Nothing is sent while the server says it does not want one. A device
+        // that signed in before the flag was flipped is holding a token that
+        // means nothing now, and sending it would only invite confusion in a
+        // log (SPEC 21).
+        ...(accessToken && authState !== "off" ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...init.headers,
       },
     });
@@ -141,6 +211,13 @@ async function request<T>(path: string, init: RequestInit = {}, retryOn401 = tru
     // No network. Not an error the user needs to see — this is the normal
     // state in a building with no coverage.
     throw new ApiError(0, "offline", String(cause));
+  }
+
+  if (response.status === 401) {
+    // The server is asking after all — whatever this device last cached, or a
+    // flag flipped back on from the host's dashboard while it was offline. The
+    // sign-in control has to reappear, and it is this that makes it (SPEC 21).
+    setAuthState("required");
   }
 
   if (response.status === 401 && retryOn401 && refreshToken) {

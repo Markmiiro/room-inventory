@@ -16,7 +16,7 @@ import { META, db, getMeta, setMeta } from "./schema";
 /** Bumped whenever `BACKUP_TABLES` changes. An older file is refused rather
  *  than restored with the newer tables silently empty — a restore that looks
  *  like it worked and left the stores bare is worse than one that stops. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export interface Backup {
   format: "room-inventory-backup";
@@ -44,6 +44,10 @@ export const BACKUP_TABLES = [
   // stores — the balance is derived from these events and exists nowhere else,
   // so a backup without them restores a farm holding nothing.
   "stores", "produceTypes", "stockIntakes", "stockOuttakes", "stockCounts",
+  // SPEC 22. A birth is the only record of where an animal born here came
+  // from; without it a restore leaves offspring with a date of birth and no
+  // mother.
+  "births",
   "outbox",
 ] as const;
 
@@ -52,7 +56,7 @@ export async function buildBackup(): Promise<Backup> {
     rooms, records, moves, purchases, healthRecords,
     sales, deaths, expenses, expenseCategories, customers, vets,
     treatmentSchedules, vetVisits, visitNotes,
-    stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, outbox,
+    stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, births, outbox,
   ] = await Promise.all([
     db.rooms.toArray(),
     db.records.toArray(),
@@ -73,6 +77,7 @@ export async function buildBackup(): Promise<Backup> {
     db.stockIntakes.toArray(),
     db.stockOuttakes.toArray(),
     db.stockCounts.toArray(),
+    db.births.toArray(),
     db.outbox.toArray(),
   ]);
 
@@ -85,7 +90,7 @@ export async function buildBackup(): Promise<Backup> {
       rooms, records, moves, purchases, healthRecords,
       sales, deaths, expenses, expenseCategories, customers, vets,
       treatmentSchedules, vetVisits, visitNotes,
-      stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, outbox,
+      stores, produceTypes, stockIntakes, stockOuttakes, stockCounts, births, outbox,
     },
   };
 }

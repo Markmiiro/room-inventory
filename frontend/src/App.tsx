@@ -12,6 +12,7 @@ import { CalendarScreen } from "./screens/Calendar";
 import { CategoriesScreen, ExpensesScreen } from "./screens/Expenses";
 import { ContactsScreen } from "./screens/Contacts";
 import { HealthScreen } from "./screens/Health";
+import { LogBirthScreen } from "./screens/LogBirth";
 import { LogDeathScreen } from "./screens/LogDeath";
 import { MoneyScreen } from "./screens/Money";
 import { AddStockScreen } from "./screens/AddStock";
@@ -44,7 +45,7 @@ import { syncEngine } from "./sync/engine";
  * The task is still escapable: focused screens get a close button rather than a
  * back arrow, which is also what the mockup shows.
  */
-const FOCUSED_ROUTES = [/^\/move/, /^\/add/, /^\/sell/, /^\/death/];
+const FOCUSED_ROUTES = [/^\/move/, /^\/add/, /^\/sell/, /^\/death/, /^\/birth/];
 
 function isFocusedRoute(pathname: string): boolean {
   return FOCUSED_ROUTES.some((pattern) => pattern.test(pathname));
@@ -85,6 +86,8 @@ function AppShell() {
             <Route path="/health" element={<HealthScreen />} />
             <Route path="/sell" element={<SellScreen />} />
             <Route path="/death" element={<LogDeathScreen />} />
+            {/* SPEC 22 */}
+            <Route path="/birth" element={<LogBirthScreen />} />
             <Route path="/expenses" element={<ExpensesScreen />} />
             <Route path="/categories" element={<CategoriesScreen />} />
             <Route path="/money/*" element={<MoneyScreen />} />
@@ -126,6 +129,7 @@ const TITLES: Array<[RegExp, string]> = [
   [/^\/health/, "Health"],
   [/^\/sell/, "Sell"],
   [/^\/death/, "Log death"],
+  [/^\/birth/, "Log birth"],
   [/^\/expenses/, "Expenses"],
   [/^\/categories/, "Manage categories"],
   [/^\/money/, "Money"],
