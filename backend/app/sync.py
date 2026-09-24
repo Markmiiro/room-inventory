@@ -86,8 +86,9 @@ WRITABLE: dict[str, set[str]] = {
         "kind", "species", "tag", "breed", "sex", "date_of_birth", "arrival_date",
         "initial_head_count", "offspring_baseline", "offspring_baseline_updated_at",
         "source", "status", "parent_record_id", "notes", "deleted_at",
-        # SPEC 22 — set once, on an offspring record created from a birth.
-        "dam_record_id", "sire_record_id", "birth_id",
+        # SPEC 22 — set once, on an offspring record created from a birth, or
+        # on one added as born here with its parents named (SPEC 22.9).
+        "dam_record_id", "sire_record_id", "sire_name", "birth_id",
     },
     "move": {
         "record_id", "from_room_id", "to_room_id", "date", "count", "reason", "note",

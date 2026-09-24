@@ -37,6 +37,7 @@ function record(over: Partial<Record_> = {}): Record_ {
     offspring_baseline_updated_at: null,
     dam_record_id: null,
     sire_record_id: null,
+    sire_name: null,
     birth_id: null,
     source: "bought",
     status: "active",

@@ -345,6 +345,17 @@ export class RoomInventoryDB extends Dexie {
         });
       }
     });
+
+    /**
+     * SPEC 22.9 — `sire_name` on a record, for an outside father named on the
+     * Add form. Not indexed, so no store changes; the upgrade only gives every
+     * existing record an explicit null rather than a missing field.
+     */
+    this.version(13).stores({}).upgrade(async (tx) => {
+      await tx.table("records").toCollection().modify((record: Record<string, unknown>) => {
+        record.sire_name = record.sire_name ?? null;
+      });
+    });
   }
 }
 

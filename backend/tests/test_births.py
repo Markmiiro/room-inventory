@@ -92,6 +92,36 @@ def test_the_offspring_records_carry_their_parentage(client):
     assert stored["date_of_birth"] == "2026-09-01"
 
 
+def test_an_animal_added_as_born_here_names_its_parents_without_a_birth(client):
+    """SPEC 22.9 — the Add form links an existing animal to its mother and names
+    an outside father, with no Birth row behind it."""
+    dam, calf = ulid("dam"), ulid("calf")
+    body = push(
+        client,
+        "device-a",
+        [
+            op_record(dam, ts(0), sex="female"),
+            op_record(
+                calf,
+                ts(1),
+                tag="C-085",
+                sex="female",
+                source="born_here",
+                dam_record_id=dam,
+                sire_name="Neighbour's Boran bull",
+            ),
+        ],
+    )
+    assert statuses(body) == ["applied", "applied"]
+
+    rows = client.get("/sync/pull?since=0").json()["changes"]
+    stored = next(r["data"] for r in rows if r["entity"] == "record" and r["id"] == calf)
+    assert stored["dam_record_id"] == dam
+    assert stored["sire_name"] == "Neighbour's Boran bull"
+    assert stored["birth_id"] is None
+    assert not [r for r in rows if r["entity"] == "birth"]
+
+
 def test_stillbirths_reduce_the_offspring_group_by_derivation(client):
     """SPEC 22 and 3.4 — the head count is derived from the events.
 

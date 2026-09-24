@@ -89,11 +89,16 @@ export interface Record_ extends SyncFields {
   notes: string | null;
   /** Cache of the latest move's destination. Recomputed, never authoritative. */
   current_room_id: string | null;
-  /** SPEC 22 — the mother, when this record was created from a birth. */
+  /** SPEC 22 — the mother, when this record was created from a birth or added
+   *  as born here with her named (SPEC 22.9). */
   dam_record_id: string | null;
   /** SPEC 22 — the father, when he is a record on this farm. An outside sire
    *  is named on the Birth as free text and has nothing here. */
   sire_record_id: string | null;
+  /** SPEC 22.9 — a father who is not a record here, named on the Add form for
+   *  an animal added as born here. An offspring of a logged birth leaves this
+   *  null: its outside sire is on the Birth, which is where it was named. */
+  sire_name: string | null;
   /** SPEC 22 — the birth event this record came out of. */
   birth_id: string | null;
 }

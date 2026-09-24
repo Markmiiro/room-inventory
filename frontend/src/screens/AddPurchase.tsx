@@ -1,11 +1,13 @@
-import { useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { CheckIcon, PlusIcon } from "../components/Icons";
+import { CheckIcon, PlusIcon, SearchIcon } from "../components/Icons";
 import { todayInEAT } from "../db/ids";
 import { createRecord, updateRecord } from "../db/mutations";
 import { activeRecords, liveRooms } from "../db/queries";
+import { db } from "../db/schema";
 import type { Record_, RecordKind, Room, Sex, Source, Species } from "../db/types";
+import { canBeDam, canBeSire } from "../domain/births";
 import { formatUGX } from "../domain/format";
 import { ALL_SPECIES, findTagClash, speciesLabel } from "../domain/rules";
 import { useLiveQuery } from "../sync/useSync";
@@ -33,6 +35,12 @@ const SOURCES: Array<{ value: Source; label: string }> = [
  * Price and seller do work: SPEC 3.7 says a Purchase is created automatically
  * whenever a record is added with `source = bought`, and `createRecord` writes
  * both rows in one transaction.
+ *
+ * SPEC 22.9 — with `source = born_here`, the parents can be named. That links
+ * the new record to its mother and father and does nothing else: no Birth is
+ * written, so there is no born or surviving count and no stillbirth. This form
+ * records an animal that already exists; Log birth records the event, and the
+ * section says so, so the two routes do not read as duplicates.
  */
 export function AddPurchaseScreen() {
   const navigate = useNavigate();
@@ -40,6 +48,9 @@ export function AddPurchaseScreen() {
 
   const rooms = useLiveQuery(liveRooms, [], [] as Room[]);
   const existing = useLiveQuery(activeRecords, [], [] as Record_[]);
+  // Every record, not only active ones: an animal's mother may since have been
+  // sold or died, and she is still its mother.
+  const everyone = useLiveQuery(() => db.records.toArray(), [], [] as Record_[]);
 
   const [kind, setKind] = useState<RecordKind>("animal");
   const [species, setSpecies] = useState<Species>("cattle");
@@ -55,10 +66,45 @@ export function AddPurchaseScreen() {
   const [price, setPrice] = useState("");
   const [seller, setSeller] = useState("");
   const [notes, setNotes] = useState("");
+  const [damId, setDamId] = useState<string | null>(null);
+  const [sireId, setSireId] = useState<string | null>(null);
+  const [sireName, setSireName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const isGroup = kind === "group";
+  const bornHere = source === "born_here";
+  const dam = everyone.find((r) => r.id === damId) ?? null;
+  const sire = everyone.find((r) => r.id === sireId) ?? null;
+  // Same species only: the picker is filtered by what is selected above, so a
+  // change of species drops a parent who no longer fits.
+  const mothers = useMemo(
+    () => everyone.filter((r) => canBeDam(r) && r.species === species),
+    [everyone, species],
+  );
+  const fathers = useMemo(
+    () => everyone.filter((r) => canBeSire(r) && r.species === species),
+    [everyone, species],
+  );
+
+  function chooseSpecies(next: Species) {
+    setSpecies(next);
+    if (dam && dam.species !== next) setDamId(null);
+    if (sire && sire.species !== next) setSireId(null);
+  }
+
+  /** Choosing a mother pre-fills what she can answer. Every field stays
+   *  editable; a mother with no breed or no room leaves what was there. The
+   *  room is only taken from a mother still on the farm — a sold one's last
+   *  room says nothing about where her calf is. */
+  function chooseMother(mother: Record_ | null) {
+    setDamId(mother?.id ?? null);
+    if (!mother) return;
+    setSpecies(mother.species);
+    if (mother.breed) setBreed(mother.breed);
+    if (mother.status === "active" && mother.current_room_id) setRoomId(mother.current_room_id);
+  }
+
   const priceShillings = price.trim() === "" ? null : Number(price.replace(/[,\s]/g, ""));
 
   async function submit() {
@@ -117,6 +163,11 @@ export function AddPurchaseScreen() {
         date: arrival,
         price: source === "bought" ? priceShillings : null,
         seller: source === "bought" ? seller : null,
+        // SPEC 22.9 — parents only for an animal born here. Chosen and then
+        // switched to Bought, they are dropped rather than carried along.
+        dam_record_id: bornHere ? damId : null,
+        sire_record_id: bornHere ? sireId : null,
+        sire_name: bornHere && !sireId ? sireName : null,
       });
 
       // Offspring is not part of createRecord's shape — it is a hand-typed
@@ -152,7 +203,7 @@ export function AddPurchaseScreen() {
             <button
               key={option}
               type="button"
-              onClick={() => setSpecies(option)}
+              onClick={() => chooseSpecies(option)}
               className={`chip min-h-touch md:min-h-touch-desktop px-4 border ${
                 species === option
                   ? "bg-primary-container text-white border-primary-container"
@@ -297,6 +348,70 @@ export function AddPurchaseScreen() {
         )}
       </section>
 
+      {bornHere && (
+        <section className="card p-4 mt-4">
+          <h2 className="text-headline-sm text-primary">Parents</h2>
+          {/* The distinction from Log birth, said where the two could be
+              confused. This route adds an animal; that one records an event. */}
+          <p className="text-body-md text-text-muted mt-1">
+            For an animal that is already here. Naming its mother lists it among
+            her offspring. This does not log a birth — no count of born and
+            surviving, no stillbirths. For a birth that has just happened, use{" "}
+            <Link
+              to={dam && canBeDam(dam) ? `/birth?record=${dam.id}` : "/birth"}
+              className="text-primary underline"
+            >
+              Log birth
+            </Link>{" "}
+            instead.
+          </p>
+
+          <ParentPicker
+            id="add-dam"
+            label="Mother"
+            candidates={mothers}
+            rooms={rooms}
+            selected={dam}
+            onSelect={chooseMother}
+            empty={`No female ${speciesLabel(species).toLowerCase()} on record.`}
+          />
+          {dam ? (
+            <p className="text-body-md text-text-muted mt-2">
+              Species, breed and room filled in from {dam.tag}. Change them above
+              if they differ.
+            </p>
+          ) : (
+            <p className="text-body-md text-text-muted mt-2">
+              Optional, but name her if you know her — it is the only way this
+              animal shows up on her record.
+            </p>
+          )}
+
+          <ParentPicker
+            id="add-sire"
+            label="Father"
+            candidates={fathers}
+            rooms={rooms}
+            selected={sire}
+            onSelect={(father) => setSireId(father?.id ?? null)}
+            empty={`No male ${speciesLabel(species).toLowerCase()} on record.`}
+          />
+          {!sire && (
+            <Field
+              label="Or, not on this farm"
+              htmlFor="add-sire-name"
+              hint="A name for somebody else's animal. Optional."
+            >
+              <input
+                id="add-sire-name" className="field" value={sireName}
+                placeholder="A bull from another farm"
+                onChange={(e) => setSireName(e.target.value)}
+              />
+            </Field>
+          )}
+        </section>
+      )}
+
       <section className="card p-4 mt-4">
         <Field label="Notes" htmlFor="add-notes">
           <textarea
@@ -323,6 +438,106 @@ export function AddPurchaseScreen() {
           {saving ? "Adding…" : isGroup ? "Add group" : "Add animal"}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A searchable list of candidate parents, collapsing to the one chosen.
+ *
+ * Tag and current room on each row, because that is how a farm tells two cows
+ * apart standing in front of them. Active animals first: the mother of an
+ * animal on the farm is usually still on it.
+ */
+function ParentPicker({
+  id,
+  label,
+  candidates,
+  rooms,
+  selected,
+  onSelect,
+  empty,
+}: {
+  id: string;
+  label: string;
+  candidates: Record_[];
+  rooms: Room[];
+  selected: Record_ | null;
+  onSelect: (record: Record_ | null) => void;
+  empty: string;
+}) {
+  const [search, setSearch] = useState("");
+
+  const shown = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const pool = needle
+      ? candidates.filter(
+          (r) => r.tag.toLowerCase().includes(needle) || (r.breed ?? "").toLowerCase().includes(needle),
+        )
+      : candidates;
+    return [...pool]
+      .sort((a, b) =>
+        a.status === b.status ? a.tag.localeCompare(b.tag) : a.status === "active" ? -1 : 1,
+      )
+      .slice(0, 8);
+  }, [candidates, search]);
+
+  function where(record: Record_): string {
+    const room = rooms.find((r) => r.id === record.current_room_id);
+    const place = room ? `${room.code} · ${room.name}` : "Not in a room";
+    return record.status === "active" ? place : `${place} · ${record.status}`;
+  }
+
+  if (selected) {
+    return (
+      <div className="mt-4">
+        <p className="data-label mb-1">{label}</p>
+        <div className="rounded-lg border border-primary-container p-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="data-value font-bold truncate">{selected.tag}</p>
+            <p className="text-body-md text-text-muted">{where(selected)}</p>
+          </div>
+          <button type="button" className="btn-quiet" onClick={() => onSelect(null)}>
+            Change
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 scroll-mb-44">
+      <label className="data-label block mb-1" htmlFor={id}>{label}</label>
+      <div className="relative">
+        <SearchIcon className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" />
+        <input
+          id={id} className="field pl-12" value={search}
+          placeholder="Search by tag or breed"
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      <ul className="mt-2 grid gap-2">
+        {shown.map((candidate) => (
+          <li key={candidate.id}>
+            <button
+              type="button"
+              className="w-full text-left rounded-lg border border-border bg-card p-3 min-h-touch md:min-h-touch-desktop"
+              onClick={() => {
+                setSearch("");
+                onSelect(candidate);
+              }}
+            >
+              <span className="data-value font-bold">{candidate.tag}</span>
+              <span className="block text-body-md text-text-muted">{where(candidate)}</span>
+            </button>
+          </li>
+        ))}
+        {shown.length === 0 && (
+          <li className="text-body-md text-text-muted p-3">
+            {search.trim() ? "Nothing matches." : empty}
+          </li>
+        )}
+      </ul>
     </div>
   );
 }

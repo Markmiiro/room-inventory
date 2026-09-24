@@ -129,6 +129,9 @@ class Record(StateMixin, Base):
     # for the animals that predate this.
     dam_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
     sire_record_id: Mapped[str | None] = mapped_column(String(26), ForeignKey("records.id"))
+    # SPEC 22.9 — a father who is not a record here, named on the Add form for
+    # an animal added as born here without a birth being logged.
+    sire_name: Mapped[str | None] = mapped_column(Text)
     # Deliberately *not* a foreign key, unlike the two above.
     #
     # The dam and the sire exist long before the birth does. The birth row is

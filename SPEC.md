@@ -1821,6 +1821,32 @@ Births are included in the device export, and `schema_version` is bumped
 alongside it: a birth is the only record of where an animal born here came from,
 so a restore without them leaves offspring with a date of birth and no mother.
 
+### 22.9 Naming the parents on the Add form
+
+An animal born here before births were recorded, or one whose birth was simply
+never logged, can still be linked to its parents. When the Add form's source is
+**Born here** it shows a **Parents** section:
+
+- **Mother** — a searchable list of female animals and groups of the species
+  selected above, each shown with its tag and current room. Optional, but the
+  form asks for her. Choosing her fills in species, breed and room from her (the
+  room only if she is still on the farm). All three stay editable.
+- **Father** — the same list for males, or a free-text name for a sire that is
+  not on this farm. The name is stored on the record as `records.sire_name`
+  (migration 0013), because this route has no Birth to put it on.
+
+Choosing a mother sets `dam_record_id`, so she lists the new record among her
+offspring and it names her on its own screen. It does **not** create a Birth.
+This route records an animal that already exists; Log birth records the event,
+with its born and surviving counts and any stillbirths. The section says so, and
+links to Log birth.
+
+For the same reason a record linked this way is not added to the mother's
+offspring figure (22.4). That figure is the typed baseline plus births counted,
+and an animal old enough to be added after the fact is most likely already in
+the baseline. Her offspring list marks it "no birth logged", so the list and
+the figure can be told apart.
+
 ---
 
 ## 23. Clearing a device

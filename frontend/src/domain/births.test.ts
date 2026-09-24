@@ -40,6 +40,7 @@ function record(overrides: Partial<Record_> = {}): Record_ {
     current_room_id: "R1",
     dam_record_id: null,
     sire_record_id: null,
+    sire_name: null,
     birth_id: null,
     ...overrides,
   };

@@ -282,7 +282,7 @@ export function RecordDetailScreen() {
           `record.birth_id` instead rendered an empty card headed "Born here"
           while the mother was still being fetched — and permanently, for an
           offspring whose dam has since been deleted. */}
-      {(dam || sire || birth) && (
+      {(dam || sire || birth || record.sire_name) && (
         <section className="card p-4 mt-2">
           <p className="data-label">Born here</p>
           {dam && (
@@ -301,9 +301,13 @@ export function RecordDetailScreen() {
               </Link>
             </p>
           ) : (
-            birth?.sire_name && (
-              // An outside sire is free text and has no record to open.
-              <p className="text-body-md mt-2">Father {birth.sire_name} — not a record on this farm</p>
+            (record.sire_name ?? birth?.sire_name) && (
+              // An outside sire is free text and has no record to open. It is
+              // on the Birth for a logged birth, and on the record itself for
+              // one added as born here (SPEC 22.9).
+              <p className="text-body-md mt-2">
+                Father {record.sire_name ?? birth?.sire_name} — not a record on this farm
+              </p>
             )
           )}
           {birth && (
@@ -344,6 +348,9 @@ export function RecordDetailScreen() {
                           ? "Female"
                           : "Sex not recorded"}
                     {child.date_of_birth ? ` · born ${formatDate(child.date_of_birth)}` : ""}
+                    {/* SPEC 22.9 — added as hers on the Add form, not from a
+                        logged birth, so not in the births counted above. */}
+                    {child.birth_id ? "" : " · no birth logged"}
                   </p>
                 </Link>
               </li>

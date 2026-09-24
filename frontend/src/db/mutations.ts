@@ -201,12 +201,14 @@ export interface RecordInput {
   room_id?: string | null;
   /** The date of that first move. Defaults to today. */
   date?: string;
-  /** SPEC 22 — the parentage of an animal born here. Set by `recordBirth` and
-   *  by nothing else: a record's mother is not something a form offers to
-   *  change afterwards, because the birth event is the thing that established
-   *  it. */
+  /** SPEC 22 — the parentage of an animal born here. Set at creation only: by
+   *  `recordBirth`, or by the Add form for an animal added as born here
+   *  (SPEC 22.9). Nothing offers to change a record's mother afterwards. */
   dam_record_id?: string | null;
   sire_record_id?: string | null;
+  /** SPEC 22.9 — an outside father, by name. Ignored when `sire_record_id` is
+   *  set: a father is either a record here or a name, never both. */
+  sire_name?: string | null;
   birth_id?: string | null;
   /** SPEC 3.7 — recorded as a Purchase when the source is `bought`. Whole
    *  shillings; ignored for anything that was born here or given. */
@@ -257,6 +259,7 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
     // everything bought, given, or already here before births were recorded.
     dam_record_id: input.dam_record_id ?? null,
     sire_record_id: input.sire_record_id ?? null,
+    sire_name: input.sire_record_id ? null : input.sire_name?.trim() || null,
     birth_id: input.birth_id ?? null,
   };
 
@@ -315,6 +318,7 @@ export async function createRecord(input: RecordInput): Promise<Record_> {
       notes: record.notes,
       dam_record_id: record.dam_record_id,
       sire_record_id: record.sire_record_id,
+      sire_name: record.sire_name,
       birth_id: record.birth_id,
     });
 
@@ -753,6 +757,8 @@ export async function recordBirth(input: BirthInput): Promise<BirthOutcome> {
           current_room_id: dam.current_room_id,
           dam_record_id: dam.id,
           sire_record_id: input.sire_record_id ?? null,
+          // An outside sire stays on the Birth, where it was named.
+          sire_name: null,
           birth_id: birth.id,
         };
 
